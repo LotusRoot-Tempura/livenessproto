@@ -1,10 +1,13 @@
 {
   "name": "grab-ticket-face-mvp",
-  "version": "0.1.0",
+  "version": "0.1.32",
   "private": true,
   "scripts": {
+    "predev": "node scripts/bump-build-version.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/bump-build-version.mjs",
     "build": "next build",
+    "prestart": "node scripts/bump-build-version.mjs",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"

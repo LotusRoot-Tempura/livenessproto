@@ -3,6 +3,7 @@ import { localStore } from "@/lib/storage";
 import type {
   EntryLog,
   FaceProfile,
+  Performance,
   StoredFaceCapture,
   Ticket,
   TransferHistory,
@@ -41,12 +42,26 @@ export function createFaceProfile(userId: string, snapshotBlobIds: string[]): Fa
   return item;
 }
 
+export function createPerformance(
+  payload: Pick<Performance, "eventName" | "eventDate" | "seatCount" | "artistName">,
+): Performance {
+  const item: Performance = {
+    id: uuid(),
+    createdAt: new Date().toISOString(),
+    ...payload,
+  };
+  localStore.savePerformances([item, ...localStore.getPerformances()]);
+  return item;
+}
+
 export function deleteFaceProfile(faceProfileId: string) {
   const next = localStore.getFaceProfiles().filter((item) => item.id !== faceProfileId);
   localStore.saveFaceProfiles(next);
 }
 
-export function createTicket(payload: Pick<Ticket, "eventName" | "eventDate" | "seatNo" | "buyerId">): Ticket {
+export function createTicket(
+  payload: Pick<Ticket, "eventName" | "eventDate" | "seatNo" | "buyerId"> & Partial<Pick<Ticket, "performanceId">>,
+): Ticket {
   const item: Ticket = {
     id: uuid(),
     holderUserId: payload.buyerId,

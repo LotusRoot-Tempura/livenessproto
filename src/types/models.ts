@@ -18,8 +18,18 @@ export interface FaceProfile {
   createdAt: string;
 }
 
+export interface Performance {
+  id: string;
+  eventName: string;
+  eventDate: string;
+  seatCount: number;
+  artistName: string;
+  createdAt: string;
+}
+
 export interface Ticket {
   id: string;
+  performanceId?: string;
   eventName: string;
   eventDate: string;
   seatNo: string;

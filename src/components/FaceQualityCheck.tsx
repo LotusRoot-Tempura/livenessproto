@@ -119,7 +119,7 @@ export function FaceQualityCheck({ videoRef }: { videoRef: React.RefObject<HTMLV
     };
   }, [modelReady, videoRef]);
 
-  const checks = useMemo(
+  const checks = useMemo<[string, boolean][]>(
     () => [
       ["얼굴 감지", state.detected],
       ["중앙 정렬", state.centered],

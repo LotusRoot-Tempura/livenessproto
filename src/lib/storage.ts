@@ -2,6 +2,7 @@ import { STORAGE_KEYS } from "@/lib/constants";
 import type {
   EntryLog,
   FaceProfile,
+  Performance,
   StoredFaceCapture,
   Ticket,
   TransferHistory,
@@ -17,6 +18,7 @@ type LegacyFaceProfile = FaceProfile & {
 type StorageShape = {
   [STORAGE_KEYS.users]: User[];
   [STORAGE_KEYS.faceProfiles]: FaceProfile[];
+  [STORAGE_KEYS.performances]: Performance[];
   [STORAGE_KEYS.tickets]: Ticket[];
   [STORAGE_KEYS.transferHistory]: TransferHistory[];
   [STORAGE_KEYS.zkIdentities]: ZkIdentity[];
@@ -49,6 +51,8 @@ export const localStore = {
       snapshotBlobIds: Array.isArray(item.snapshotBlobIds) ? item.snapshotBlobIds : [],
     })),
   saveFaceProfiles: (items: FaceProfile[]) => write(STORAGE_KEYS.faceProfiles, items),
+  getPerformances: () => read<Performance>(STORAGE_KEYS.performances),
+  savePerformances: (items: Performance[]) => write(STORAGE_KEYS.performances, items),
   getTickets: () => read<Ticket>(STORAGE_KEYS.tickets),
   saveTickets: (items: Ticket[]) => write(STORAGE_KEYS.tickets, items),
   getTransfers: () => read<TransferHistory>(STORAGE_KEYS.transferHistory),

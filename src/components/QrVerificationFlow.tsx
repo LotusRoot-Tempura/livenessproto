@@ -22,11 +22,23 @@ export function QrVerificationFlow() {
     };
   }, []);
 
+  const clearScannerFrame = () => {
+    const current = scannerRef.current;
+    if (current) current.innerHTML = "";
+  };
+
+  const resetScanResult = () => {
+    setTicket(null);
+    setScannerReady(false);
+    clearScannerFrame();
+  };
+
   const startScanner = async () => {
     setLoading(true);
     try {
       const { Html5Qrcode } = await import("html5-qrcode");
       const readerId = "qr-reader";
+      resetScanResult();
       const scanner = new Html5Qrcode(readerId);
       setScannerReady(true);
       await scanner.start(
@@ -36,6 +48,8 @@ export function QrVerificationFlow() {
           const found = localStore.getTickets().find((item) => item.id === decodedText) ?? null;
           setTicket(found);
           await scanner.stop();
+          clearScannerFrame();
+          setScannerReady(false);
         },
         () => undefined,
       );
@@ -47,6 +61,12 @@ export function QrVerificationFlow() {
   const manualLoadLatest = () => {
     const latest = localStore.getTickets()[0] ?? null;
     setTicket(latest);
+    clearScannerFrame();
+    setScannerReady(false);
+  };
+
+  const handleRescan = () => {
+    void startScanner();
   };
 
   return (
@@ -58,15 +78,24 @@ export function QrVerificationFlow() {
         </Button>
       </div>
       <p className="helper-text">iOS Safari 등 모바일 환경에서는 카메라 권한 허용 후 HTTPS 또는 localhost에서 동작합니다.</p>
-      <div id="qr-reader" ref={scannerRef} className="panel" />
+      {!ticket ? <div id="qr-reader" ref={scannerRef} className="panel" /> : null}
       {loading ? <LoadingState text="QR 스캐너를 준비하고 있습니다." /> : null}
       {!ticket && !scannerReady ? (
         <EmptyState title="아직 스캔된 티켓이 없습니다." description="현장 QR을 스캔하거나 테스트 버튼을 사용해 주세요." />
       ) : null}
       {ticket ? (
         <>
+          <div className="button-row">
+            <Button onClick={handleRescan} variant="secondary">
+              다시 스캔
+            </Button>
+          </div>
           <StatusCard title="티켓 유효성 확인 완료" description={`${ticket.eventName} / ${ticket.seatNo}`} tone="success" />
-          <StatusCard title="ZK 권한 검증 완료 mock" description="로컬 저장된 mock commitment 기준으로 승인 처리했습니다." tone="info" />
+          <StatusCard
+            title="ZK 권한 검증 완료 mock"
+            description="로컬 저장 mock commitment 기준으로 확인 처리했습니다."
+            tone="info"
+          />
           <StatusCard title="얼굴 인증 필요" description="이제 현장 얼굴 캡처 후 mock 판정을 진행합니다." tone="warning" />
           <FaceCaptureVerifier ticket={ticket} />
         </>
