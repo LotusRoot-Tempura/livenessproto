@@ -1,12 +1,14 @@
 export type TicketStatus = "active" | "used" | "cancelled";
 export type FaceProfileStatus = "ready" | "pending" | "rejected";
 export type EntryResult = "allowed" | "manual_review" | "denied";
+export type PerformanceStatus = "운영" | "보류" | "종료";
 
 export interface User {
   id: string;
   name: string;
   email: string;
   phone: string;
+  password?: string;
   createdAt: string;
 }
 
@@ -22,6 +24,9 @@ export interface Performance {
   id: string;
   eventName: string;
   eventDate: string;
+  roundLabel?: string;
+  shareCode?: string;
+  status?: PerformanceStatus;
   seatCount: number;
   artistName: string;
   createdAt: string;

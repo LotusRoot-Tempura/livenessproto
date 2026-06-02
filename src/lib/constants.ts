@@ -9,24 +9,96 @@ export const STORAGE_KEYS = {
   faceCaptures: "gtf_face_captures",
 } as const;
 
-export const MENU_ITEMS = [
-  { href: "/", label: "홈", description: "운영 현황과 주요 기능으로 이동합니다." },
-  { href: "/users", label: "이용자 등록", description: "이름, 연락처 등록 및 목록을 확인합니다." },
-  { href: "/face-register", label: "얼굴등록", description: "촬영 가이드를 보고 얼굴 등록을 진행합니다." },
-  { href: "/performances", label: "공연등록", description: "공연명, 공연일, 좌석수, 가수명을 등록합니다." },
-  { href: "/tickets/create", label: "티켓생성", description: "등록된 공연을 선택해 QR 티켓을 생성합니다." },
-  { href: "/tickets", label: "티켓목록", description: "티켓 목록과 입장자 변경 상태를 확인합니다." },
-  { href: "/verify", label: "QR인증", description: "현장에서 QR과 얼굴 인증 mock을 진행합니다." },
-  { href: "/logs", label: "입장로그", description: "입장 결과와 확인 기록을 봅니다." },
+export type AppRole = "user" | "venue-tablet" | "tablet-admin";
+
+export type NavItem = {
+  href: string;
+  label: string;
+  description: string;
+};
+
+type RoleDefinition = {
+  key: AppRole;
+  href: string;
+  label: string;
+  shortLabel: string;
+  description: string;
+};
+
+export const ROLE_ITEMS: readonly RoleDefinition[] = [
+  {
+    key: "user",
+    href: "/user/profile",
+    label: "이용자",
+    shortLabel: "이용자",
+    description: "얼굴등록, 티켓구매, 프로필을 확인합니다.",
+  },
+  {
+    key: "venue-tablet",
+    href: "/venue/qr-scan",
+    label: "공연장 테블릿",
+    shortLabel: "공연장",
+    description: "QR스캔과 얼굴 인증으로 입장을 확인합니다.",
+  },
+  {
+    key: "tablet-admin",
+    href: "/admin/members",
+    label: "테블릿 관리자",
+    shortLabel: "관리자",
+    description: "회원가입 목록, 공연등록, 티켓등록, 입장로그를 관리합니다.",
+  },
 ] as const;
 
-export const TAB_ITEMS = [
-  { href: "/", label: "홈" },
-  { href: "/users", label: "이용자" },
-  { href: "/face-register", label: "얼굴등록" },
-  { href: "/performances", label: "공연등록" },
-  { href: "/tickets/create", label: "티켓생성" },
-  { href: "/tickets", label: "티켓목록" },
-  { href: "/verify", label: "QR인증" },
-  { href: "/logs", label: "입장로그" },
+export const USER_APP_MENU_ITEMS: readonly NavItem[] = [
+  { href: "/user/face-register", label: "얼굴등록", description: "이용자 얼굴 영상을 등록합니다." },
+  { href: "/user/tickets/create", label: "티켓구매", description: "공연 티켓을 생성하고 구매 흐름을 진행합니다." },
+  { href: "/user/profile", label: "프로필", description: "현재 로그인한 회원 정보를 확인합니다." },
 ] as const;
+
+export const VENUE_TABLET_MENU_ITEMS: readonly NavItem[] = [
+  { href: "/venue/qr-scan", label: "QR스캔", description: "입장 티켓 QR을 스캔합니다." },
+  { href: "/venue/face-auth", label: "얼굴 인증", description: "스캔한 티켓 기준으로 얼굴 인증을 진행합니다." },
+  { href: "/venue/profile", label: "프로필", description: "현재 로그인한 계정 정보를 확인합니다." },
+] as const;
+
+export const TABLET_ADMIN_MENU_ITEMS: readonly NavItem[] = [
+  { href: "/admin/members", label: "회원목록", description: "등록된 회원 목록을 확인합니다." },
+  { href: "/admin/performances", label: "공연등록", description: "공연장과 공연 정보를 등록합니다." },
+  { href: "/admin/tickets", label: "티겟등록", description: "생성된 티켓을 관리합니다." },
+  { href: "/admin/logs", label: "입장로그", description: "입장 결과와 이력을 확인합니다." },
+  { href: "/admin/profile", label: "프로필", description: "현재 로그인한 관리자 정보를 확인합니다." },
+] as const;
+
+const ROLE_PATH_MATCHERS: Record<AppRole, readonly string[]> = {
+  user: ["/user", "/face-register"],
+  "venue-tablet": ["/venue", "/verify"],
+  "tablet-admin": ["/admin", "/performances", "/tickets", "/logs"],
+};
+
+export function getRoleByPathname(pathname: string): AppRole | null {
+  for (const role of ROLE_ITEMS) {
+    if (ROLE_PATH_MATCHERS[role.key].some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) {
+      return role.key;
+    }
+  }
+
+  return null;
+}
+
+export function getMenuItemsByRole(role: AppRole | null): readonly NavItem[] {
+  switch (role) {
+    case "user":
+      return USER_APP_MENU_ITEMS;
+    case "venue-tablet":
+      return VENUE_TABLET_MENU_ITEMS;
+    case "tablet-admin":
+      return TABLET_ADMIN_MENU_ITEMS;
+    default:
+      return [];
+  }
+}
+
+export function getRoleLabel(role: AppRole | null): string {
+  if (!role) return "메인 홈";
+  return ROLE_ITEMS.find((item) => item.key === role)?.label ?? "메인 홈";
+}

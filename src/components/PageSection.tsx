@@ -5,16 +5,18 @@ export function PageSection({
   description,
   children,
 }: {
-  title: string;
+  title?: string;
   description?: string;
   children: ReactNode;
 }) {
   return (
     <section className="page-section">
-      <div className="section-header">
-        <h2>{title}</h2>
-        {description ? <p>{description}</p> : null}
-      </div>
+      {title || description ? (
+        <div className="section-header">
+          {title ? <h2>{title}</h2> : null}
+          {description ? <p>{description}</p> : null}
+        </div>
+      ) : null}
       {children}
     </section>
   );

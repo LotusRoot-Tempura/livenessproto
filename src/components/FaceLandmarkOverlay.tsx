@@ -439,7 +439,7 @@ export function FaceLandmarkOverlay({
     return () => {
       cancelled = true;
       if (rafId) cancelAnimationFrame(rafId);
-      faceLandmarker?.close?.();
+      faceLandmarker = null;
       metricsBufferRef.current = [];
       metricsLockedRef.current = false;
       metricsStartRef.current = null;

@@ -10,6 +10,8 @@ import type {
   ZkIdentity,
 } from "@/types/models";
 
+export const STORAGE_STATE_EVENT = "gtf-storage-state-changed";
+
 type LegacyFaceProfile = FaceProfile & {
   videoBlobId?: string;
   snapshotBlobIds?: string[];
@@ -40,6 +42,7 @@ function read<T>(key: keyof StorageShape): T[] {
 function write<T>(key: keyof StorageShape, data: T[]) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(key, JSON.stringify(data));
+  window.dispatchEvent(new CustomEvent(STORAGE_STATE_EVENT, { detail: { key } }));
 }
 
 export const localStore = {
