@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import Link from "next/link";
 import QRCode from "react-qr-code";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
@@ -55,6 +56,7 @@ function getRoundOrder(performance: Performance) {
 
 export function TicketCreator() {
   const { data: performances } = useLocalData(() => localStore.getPerformances(), [], []);
+  const { data: faceProfiles } = useLocalData(() => localStore.getFaceProfiles(), [], []);
   const { data: tickets, refresh: refreshTickets } = useLocalData(() => localStore.getTickets(), [], []);
   const currentUser = getCurrentUserAccount();
   const [errorMessage, setErrorMessage] = useState("");
@@ -128,6 +130,16 @@ export function TicketCreator() {
       .filter((ticket) => ticket.buyerId === currentUser.id)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }, [currentUser, tickets]);
+  const hasReadyFaceProfile = useMemo(() => {
+    if (!currentUser) return false;
+    return faceProfiles.some(
+      (profile) =>
+        profile.userId === currentUser.id &&
+        profile.status === "ready" &&
+        Array.isArray(profile.snapshotBlobIds) &&
+        profile.snapshotBlobIds.length > 0,
+    );
+  }, [currentUser, faceProfiles]);
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -168,6 +180,38 @@ export function TicketCreator() {
         title="먼저 공연을 등록해 주세요"
         description="공연등록 탭에서 공연 정보를 등록하면 티켓 생성에서 선택할 수 있습니다."
       />
+    );
+  }
+
+  if (!hasReadyFaceProfile) {
+    return (
+      <div className="list">
+        <EmptyState
+          title="얼굴등록이 먼저 필요합니다"
+          description="회원가입 후 얼굴등록을 완료해야 티켓구매를 진행할 수 있습니다."
+        />
+        <Link href="/user/face-register">
+          <Button type="button">얼굴등록 하러가기</Button>
+        </Link>
+        {purchasedTickets.length > 0 ? (
+          <div className="list">
+            {purchasedTickets.map((ticket) => (
+              <article key={ticket.id} className="panel">
+                <strong>{ticket.eventName}</strong>
+                <p className="list-card__meta">티켓번호: {ticket.id}</p>
+                <p className="helper-text">
+                  {formatDate(ticket.eventDate)} / {ticket.seatNo}
+                </p>
+                <div style={{ background: "#ffffff", padding: 16, borderRadius: 16, width: "fit-content" }}>
+                  <QRCode value={ticket.id} size={180} />
+                </div>
+                <p className="helper-text">QR에는 ticketId만 포함됩니다.</p>
+                <p className="list-card__meta">생성일: {formatDateTime(ticket.createdAt)}</p>
+              </article>
+            ))}
+          </div>
+        ) : null}
+      </div>
     );
   }
 

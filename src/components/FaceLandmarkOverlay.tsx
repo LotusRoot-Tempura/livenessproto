@@ -7,6 +7,35 @@ type LandmarkPoint = {
   y: number;
 };
 
+const TFLITE_INFO_LOG = "INFO: Created TensorFlow Lite XNNPACK delegate for CPU.";
+
+function isIgnorableTfliteInfoError(error: unknown) {
+  return error instanceof Error && error.message.includes(TFLITE_INFO_LOG);
+}
+
+function withSuppressedTfliteInfo<T>(callback: () => T): T | null {
+  const originalConsoleError = console.error;
+
+  console.error = (...args: unknown[]) => {
+    const firstArg = args[0];
+    if (typeof firstArg === "string" && firstArg.includes(TFLITE_INFO_LOG)) {
+      return;
+    }
+    originalConsoleError(...args);
+  };
+
+  try {
+    return callback();
+  } catch (error) {
+    if (isIgnorableTfliteInfoError(error)) {
+      return null;
+    }
+    throw error;
+  } finally {
+    console.error = originalConsoleError;
+  }
+}
+
 const FACE_OVAL = [
   10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176,
   149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10,
@@ -308,10 +337,19 @@ export function FaceLandmarkOverlay({
   useEffect(() => {
     let cancelled = false;
     let rafId: number | null = null;
+    const originalConsoleError = console.error;
     let faceLandmarker: {
       detectForVideo: (video: HTMLVideoElement, timestamp: number) => { faceLandmarks?: LandmarkPoint[][] };
       close?: () => void;
     } | null = null;
+
+    console.error = (...args: unknown[]) => {
+      const firstArg = args[0];
+      if (typeof firstArg === "string" && firstArg.includes(TFLITE_INFO_LOG)) {
+        return;
+      }
+      originalConsoleError(...args);
+    };
 
     async function setup() {
       try {
@@ -347,7 +385,9 @@ export function FaceLandmarkOverlay({
           }
 
           if (video.readyState >= 2) {
-            const result = faceLandmarker?.detectForVideo(video, performance.now());
+            const result = withSuppressedTfliteInfo(
+              () => faceLandmarker?.detectForVideo(video, performance.now()),
+            );
             const landmarks = result?.faceLandmarks?.[0];
 
             if (landmarks) {
@@ -439,6 +479,7 @@ export function FaceLandmarkOverlay({
     return () => {
       cancelled = true;
       if (rafId) cancelAnimationFrame(rafId);
+      console.error = originalConsoleError;
       faceLandmarker = null;
       metricsBufferRef.current = [];
       metricsLockedRef.current = false;

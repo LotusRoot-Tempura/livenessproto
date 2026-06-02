@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuid } from "uuid";
+import { getCurrentUserAccount } from "@/lib/auth";
 import { createFaceProfile, deleteFaceProfile } from "@/lib/mock";
 import { mediaDb } from "@/lib/db";
 import { localStore } from "@/lib/storage";
@@ -50,14 +51,15 @@ const EMPTY_FACE_FEATURE_METRICS: FaceFeatureMetrics = {
   total: 0,
 };
 
+const LANDMARK_OVERLAY_ENABLED = true;
+
 export function FaceRegistrationFlow() {
-  const { data: users } = useLocalData(() => localStore.getUsers(), [], []);
   const { data: profiles, refresh } = useLocalData(() => localStore.getFaceProfiles(), [], []);
-  const [selectedUserId, setSelectedUserId] = useState("");
+  const currentUser = getCurrentUserAccount();
   const [cameraReady, setCameraReady] = useState(false);
   const [captureMode, setCaptureMode] = useState<CaptureMode>("idle");
   const [countdown, setCountdown] = useState<number | null>(null);
-  const [statusMessage, setStatusMessage] = useState("이용자를 선택하고 카메라를 준비해 주세요.");
+  const [statusMessage, setStatusMessage] = useState("카메라를 준비해 주세요.");
   const [errorMessage, setErrorMessage] = useState("");
   const [stepIndex, setStepIndex] = useState(0);
   const [snapshotBlobIds, setSnapshotBlobIds] = useState<string[]>([]);
@@ -72,6 +74,7 @@ export function FaceRegistrationFlow() {
   const [sampleModalOpen, setSampleModalOpen] = useState(false);
   const [faceFeatureMetrics, setFaceFeatureMetrics] = useState<FaceFeatureMetrics>(EMPTY_FACE_FEATURE_METRICS);
   const [faceFeatureMetricsStatus, setFaceFeatureMetricsStatus] = useState<"idle" | "sampling" | "locked">("idle");
+  const [qualityReady, setQualityReady] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -89,10 +92,10 @@ export function FaceRegistrationFlow() {
     };
   }, []);
 
-  const selectedUserName = useMemo(
-    () => users.find((user) => user.id === selectedUserId)?.name ?? "",
-    [selectedUserId, users],
-  );
+  const currentUserProfiles = useMemo(() => {
+    if (!currentUser) return [];
+    return profiles.filter((profile) => profile.userId === currentUser.id);
+  }, [currentUser, profiles]);
 
   const currentGuideIndex = selectedRetakeIndex ?? stepIndex;
   const currentGuide = SNAPSHOT_GUIDES[Math.min(currentGuideIndex, SNAPSHOT_GUIDES.length - 1)];
@@ -227,6 +230,7 @@ export function FaceRegistrationFlow() {
     setSubmittedUserId("");
     setStatusMessage("새 촬영 세션을 시작할 수 있습니다.");
     setErrorMessage("");
+    setQualityReady(false);
   };
 
   const stopCapture = () => {
@@ -321,13 +325,18 @@ export function FaceRegistrationFlow() {
   const startAutoSequence = async () => {
     setErrorMessage("");
 
-    if (!selectedUserId) {
-      setErrorMessage("먼저 이용자를 선택해 주세요.");
+    if (!currentUser) {
+      setErrorMessage("로그인 정보를 확인할 수 없습니다. 다시 로그인해 주세요.");
       return;
     }
 
     if (!streamRef.current || !videoRef.current || !canvasRef.current) {
       setErrorMessage("카메라가 준비되지 않았습니다. 먼저 촬영 시작 준비를 눌러 주세요.");
+      return;
+    }
+
+    if (!qualityReady) {
+      setErrorMessage("실제 얼굴 움직임 확인이 완료된 뒤 자동촬영을 시작할 수 있습니다.");
       return;
     }
 
@@ -440,8 +449,8 @@ export function FaceRegistrationFlow() {
   };
 
   const saveProfile = async () => {
-    if (!selectedUserId) {
-      setErrorMessage("먼저 이용자를 선택해 주세요.");
+    if (!currentUser) {
+      setErrorMessage("로그인 정보를 확인할 수 없습니다. 다시 로그인해 주세요.");
       return;
     }
 
@@ -450,20 +459,20 @@ export function FaceRegistrationFlow() {
       return;
     }
 
-    createFaceProfile(selectedUserId, snapshotBlobIds);
+    createFaceProfile(currentUser.id, snapshotBlobIds);
     refresh();
     setProfileSaved(true);
-    setStatusMessage(`${selectedUserName || "선택한 이용자"}의 베스트 스냅샷 7장이 등록되었습니다.`);
+    setStatusMessage(`${currentUser.name}님의 베스트 스냅샷 7장이 등록되었습니다.`);
     await playCompleteSound();
     await speak("최종 저장이 완료되었습니다.");
   };
 
   const submitSelection = () => {
-    if (!selectedUserId) {
-      setErrorMessage("먼저 이용자를 선택해 주세요.");
+    if (!currentUser) {
+      setErrorMessage("로그인 정보를 확인할 수 없습니다. 다시 로그인해 주세요.");
       return;
     }
-    setSubmittedUserId(selectedUserId);
+    setSubmittedUserId(currentUser.id);
     setStatusMessage("제출이 완료되었습니다.");
   };
 
@@ -475,6 +484,9 @@ export function FaceRegistrationFlow() {
 
   return (
     <div className="list list--compact">
+      {!currentUser ? (
+        <EmptyState title="로그인 정보가 없습니다." description="다시 로그인한 뒤 얼굴등록을 진행해 주세요." />
+      ) : null}
       <div className="panel panel--compact face-register-summary">
         <div className="face-register-summary__top">
           <strong>빠른 등록</strong>
@@ -499,30 +511,20 @@ export function FaceRegistrationFlow() {
       {errorMessage ? <StatusCard title="오류 안내" description={errorMessage} tone="danger" /> : null}
 
       <div className="panel panel--compact face-register-controls">
-        <div className="field field--compact">
-          <label htmlFor="userId">이용자 선택</label>
-          <select
-            id="userId"
-            value={selectedUserId}
-            onChange={(e) => {
-              setSelectedUserId(e.target.value);
-              resetSession();
-            }}
-          >
-            <option value="">이용자를 선택하세요</option>
-            {users.map((user) => (
-              <option key={user.id} value={user.id}>
-                {user.name} / {user.phone}
-              </option>
-            ))}
-          </select>
-        </div>
+        {currentUser ? (
+          <div className="field field--compact">
+            <label>이용자</label>
+            <div className="list-card__meta">
+              {currentUser.name} / {currentUser.phone} / {currentUser.email}
+            </div>
+          </div>
+        ) : null}
 
         <div className="button-row button-row--dense">
-          <Button onClick={startCamera} disabled={!selectedUserId || cameraReady || isBusy}>
+          <Button onClick={startCamera} disabled={!currentUser || cameraReady || isBusy}>
             준비
           </Button>
-          <Button onClick={startAutoSequence} disabled={!cameraReady || !selectedUserId || isBusy}>
+          <Button onClick={startAutoSequence} disabled={!cameraReady || !currentUser || isBusy || !qualityReady}>
             {captureMode === "sequence" ? "진행 중" : "자동촬영"}
           </Button>
         </div>
@@ -553,11 +555,13 @@ export function FaceRegistrationFlow() {
         <div className="face-register-visuals">
           <div className="camera-frame camera-frame--compact camera-frame--overlay">
             <video ref={videoRef} muted playsInline />
-            <FaceLandmarkOverlay
-              videoRef={videoRef}
-              onMetricsChange={setFaceFeatureMetrics}
-              onMetricsStatusChange={setFaceFeatureMetricsStatus}
-            />
+            {LANDMARK_OVERLAY_ENABLED ? (
+              <FaceLandmarkOverlay
+                videoRef={videoRef}
+                onMetricsChange={setFaceFeatureMetrics}
+                onMetricsStatusChange={setFaceFeatureMetricsStatus}
+              />
+            ) : null}
             <div className="camera-overlay">
               <div className="camera-overlay__top">
                 <div className="camera-overlay__guide">
@@ -582,10 +586,15 @@ export function FaceRegistrationFlow() {
               <div className="list-card__meta">
                 상태: {faceFeatureMetricsStatus === "sampling" ? "측정 중..." : faceFeatureMetricsStatus === "locked" ? "평균 확정" : "대기 중"}
               </div>
+              {!LANDMARK_OVERLAY_ENABLED ? (
+                <div className="helper-text helper-text--tight">
+                  개발 모드에서는 MediaPipe 개발 오버레이 충돌을 피하기 위해 얼굴 랜드마크 측정을 잠시 끄고 있습니다.
+                </div>
+              ) : null}
               <div className="helper-text helper-text--tight">점 위치와 연결선 길이를 얼굴 비율 기준으로 환산한 실측형 수치입니다.</div>
             </div>
           </div>
-          <FaceQualityCheck videoRef={videoRef} />
+          <FaceQualityCheck videoRef={videoRef} onReadyStateChange={setQualityReady} />
           <canvas ref={canvasRef} style={{ display: "none" }} />
         </div>
       </div>
@@ -631,12 +640,12 @@ export function FaceRegistrationFlow() {
       </div>
 
       <div className="list list--compact">
-        {profiles.length === 0 ? (
-          <EmptyState title="등록된 얼굴 세트가 없습니다." description="이용자를 선택한 뒤 자동 촬영을 시작해 주세요." />
+        {currentUserProfiles.length === 0 ? (
+          <EmptyState title="등록된 얼굴 세트가 없습니다." description="자동 촬영을 시작해 내 얼굴을 먼저 등록해 주세요." />
         ) : (
-          profiles.map((profile) => (
+          currentUserProfiles.map((profile) => (
             <article key={profile.id} className="list-card list-card--compact">
-              <strong>사용자 ID: {profile.userId}</strong>
+              <strong>{currentUser?.name ?? "이용자"} 얼굴등록</strong>
               <div className="inline-meta">
                 <span className="badge" data-tone="success">
                   {(profile.snapshotBlobIds ?? []).length}장
