@@ -7,7 +7,7 @@ import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { useLocalData } from "@/hooks/useLocalData";
 import { getCurrentUserAccount } from "@/lib/auth";
-import { MAX_TICKETS_PER_BUYER_PER_PERFORMANCE, createTicketsForPurchase } from "@/lib/mock";
+import { MAX_TICKETS_PER_BUYER_PER_PERFORMANCE, cancelTicket, createTicketsForPurchase } from "@/lib/mock";
 import { localStore } from "@/lib/storage";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import type { Performance, Ticket } from "@/types/models";
@@ -24,7 +24,7 @@ function getNextAvailableSeatNumbers(performance: Performance | undefined, ticke
 
   const takenSeats = new Set(
     tickets
-      .filter((ticket) => ticket.performanceId === performance.id)
+      .filter((ticket) => ticket.performanceId === performance.id && ticket.status !== "cancelled")
       .map((ticket) => extractSeatSequence(ticket.seatNo))
       .filter((seatNo): seatNo is number => seatNo !== null),
   );
@@ -54,12 +54,26 @@ function getRoundOrder(performance: Performance) {
   return 99;
 }
 
+function getTicketScheduleLabel(ticket: Ticket, performances: Performance[]) {
+  const matchedPerformance =
+    performances.find((performance) => performance.id === ticket.performanceId) ??
+    performances.find(
+      (performance) =>
+        performance.eventName === ticket.eventName && performance.eventDate === ticket.eventDate,
+    );
+  const time = ticket.eventDate.slice(11, 16);
+  const dateTimeLabel = time ? `${formatDate(ticket.eventDate)} ${time}` : formatDate(ticket.eventDate);
+  const roundLabel = matchedPerformance?.roundLabel ?? "-";
+  return `공연날짜: ${dateTimeLabel} / ${roundLabel}`;
+}
+
 export function TicketCreator() {
   const { data: performances } = useLocalData(() => localStore.getPerformances(), [], []);
   const { data: faceProfiles } = useLocalData(() => localStore.getFaceProfiles(), [], []);
   const { data: tickets, refresh: refreshTickets } = useLocalData(() => localStore.getTickets(), [], []);
   const currentUser = getCurrentUserAccount();
   const [errorMessage, setErrorMessage] = useState("");
+  const [pendingCancelTicket, setPendingCancelTicket] = useState<Ticket | null>(null);
   const [form, setForm] = useState({
     eventName: "",
     eventDay: "",
@@ -107,14 +121,19 @@ export function TicketCreator() {
   const buyerTicketCount = useMemo(() => {
     if (!currentUser || !selectedPerformance) return 0;
     return tickets.filter(
-      (ticket) => ticket.buyerId === currentUser.id && ticket.performanceId === selectedPerformance.id,
+      (ticket) =>
+        ticket.buyerId === currentUser.id &&
+        ticket.performanceId === selectedPerformance.id &&
+        ticket.status !== "cancelled",
     ).length;
   }, [currentUser, selectedPerformance, tickets]);
 
   const remainingBuyerLimit = Math.max(0, MAX_TICKETS_PER_BUYER_PER_PERFORMANCE - buyerTicketCount);
   const remainingSeatCount = useMemo(() => {
     if (!selectedPerformance) return 0;
-    const soldCount = tickets.filter((ticket) => ticket.performanceId === selectedPerformance.id).length;
+    const soldCount = tickets.filter(
+      (ticket) => ticket.performanceId === selectedPerformance.id && ticket.status !== "cancelled",
+    ).length;
     return Math.max(0, selectedPerformance.seatCount - soldCount);
   }, [selectedPerformance, tickets]);
 
@@ -170,6 +189,13 @@ export function TicketCreator() {
     }
   };
 
+  const onCancelTicket = () => {
+    if (!pendingCancelTicket) return;
+    cancelTicket(pendingCancelTicket.id);
+    setPendingCancelTicket(null);
+    refreshTickets();
+  };
+
   if (!currentUser) {
     return <EmptyState title="로그인 정보가 없습니다." description="다시 로그인한 뒤 티켓구매를 진행해 주세요." />;
   }
@@ -199,6 +225,7 @@ export function TicketCreator() {
               <article key={ticket.id} className="panel">
                 <strong>{ticket.eventName}</strong>
                 <p className="list-card__meta">티켓번호: {ticket.id}</p>
+                <p className="list-card__meta">상태: {ticket.status}</p>
                 <p className="helper-text">
                   {formatDate(ticket.eventDate)} / {ticket.seatNo}
                 </p>
@@ -327,19 +354,45 @@ export function TicketCreator() {
       {purchasedTickets.length > 0 ? (
         <div className="list">
           {purchasedTickets.map((ticket) => (
-            <article key={ticket.id} className="panel">
-              <strong>{ticket.eventName}</strong>
-              <p className="list-card__meta">티켓번호: {ticket.id}</p>
-              <p className="helper-text">
-                {formatDate(ticket.eventDate)} / {ticket.seatNo}
-              </p>
-              <div style={{ background: "#ffffff", padding: 16, borderRadius: 16, width: "fit-content" }}>
-                <QRCode value={ticket.id} size={180} />
-              </div>
-              <p className="helper-text">QR에는 ticketId만 포함됩니다.</p>
-              <p className="list-card__meta">생성일: {formatDateTime(ticket.createdAt)}</p>
-            </article>
+              <article key={ticket.id} className="panel ticket-card">
+                <strong>{ticket.eventName}</strong>
+                <p className="list-card__meta">티켓번호: {ticket.id}</p>
+                <p className="list-card__meta">좌석: {ticket.seatNo} / 상태: {ticket.status}</p>
+                <p className="helper-text">{getTicketScheduleLabel(ticket, performances)}</p>
+                <div className="ticket-card__qr">
+                  <QRCode value={ticket.id} size={148} />
+                </div>
+                <p className="helper-text">QR에는 ticketId만 포함됩니다.</p>
+                <div className="button-row">
+                  {ticket.status === "cancelled" ? (
+                    <span className="ticket-action-badge">취소 완료</span>
+                  ) : (
+                    <button type="button" className="ticket-action-button" onClick={() => setPendingCancelTicket(ticket)}>
+                      티켓 취소
+                    </button>
+                  )}
+                </div>
+              </article>
           ))}
+        </div>
+      ) : null}
+
+      {pendingCancelTicket ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="ticket-cancel-title">
+          <div className="confirm-modal">
+            <strong id="ticket-cancel-title">정말 취소하시겠습니까?</strong>
+            <p className="helper-text helper-text--tight">
+              {pendingCancelTicket.eventName} / 좌석 {pendingCancelTicket.seatNo}
+            </p>
+            <div className="button-row">
+              <Button type="button" variant="danger" onClick={onCancelTicket}>
+                취소하기
+              </Button>
+              <Button type="button" variant="secondary" onClick={() => setPendingCancelTicket(null)}>
+                닫기
+              </Button>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

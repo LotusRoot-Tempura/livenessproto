@@ -128,6 +128,15 @@ export function deleteFaceProfile(faceProfileId: string) {
   localStore.saveFaceProfiles(next);
 }
 
+export function cancelTicket(ticketId: string) {
+  const tickets = localStore.getTickets();
+  const updated = tickets.map((ticket) =>
+    ticket.id === ticketId ? { ...ticket, status: "cancelled" as const } : ticket,
+  );
+  localStore.saveTickets(updated);
+  return updated.find((ticket) => ticket.id === ticketId) ?? null;
+}
+
 export function createTicket(
   payload: Pick<Ticket, "eventName" | "eventDate" | "seatNo" | "buyerId"> & Partial<Pick<Ticket, "performanceId">>,
 ): Ticket {
@@ -156,7 +165,7 @@ export function createTicketsForPurchase(
     },
 ): Ticket[] {
   const tickets = localStore.getTickets();
-  const performanceTickets = tickets.filter((ticket) => ticket.performanceId === payload.id);
+  const performanceTickets = tickets.filter((ticket) => ticket.performanceId === payload.id && ticket.status !== "cancelled");
   const buyerTickets = performanceTickets.filter((ticket) => ticket.buyerId === payload.buyerId);
 
   if (buyerTickets.length + payload.quantity > MAX_TICKETS_PER_BUYER_PER_PERFORMANCE) {

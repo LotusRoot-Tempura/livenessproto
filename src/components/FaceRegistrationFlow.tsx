@@ -189,6 +189,20 @@ export function FaceRegistrationFlow() {
     await playTone(880, 180, "triangle", 0.06);
   };
 
+  const persistFaceProfile = async (blobIds: string[]) => {
+    if (!currentUser || blobIds.length !== SNAPSHOT_GUIDES.length) {
+      return false;
+    }
+
+    createFaceProfile(currentUser.id, blobIds);
+    refresh();
+    setProfileSaved(true);
+    setStatusMessage(`${currentUser.name}님의 정면 사진 3장이 등록되었습니다.`);
+    await playCompleteSound();
+    await speak("얼굴 등록이 완료되었습니다.");
+    return true;
+  };
+
   const resetSession = () => {
     cancelledRef.current = true;
     window.speechSynthesis?.cancel();
@@ -360,9 +374,12 @@ export function FaceRegistrationFlow() {
       }
 
       setSequenceComplete(true);
-      setStatusMessage("정면 3장 촬영 완료. 필요한 사진만 다시 촬영하거나 최종 저장해 주세요.");
-      await playCompleteSound();
-      await speak("정면 사진 세 장 촬영이 완료되었습니다. 필요한 사진만 다시 촬영하거나 저장해 주세요.");
+      const saved = await persistFaceProfile(capturedBlobIds);
+      if (!saved) {
+        setStatusMessage("정면 3장 촬영 완료. 필요한 사진만 다시 촬영하거나 최종 저장해 주세요.");
+        await playCompleteSound();
+        await speak("정면 사진 세 장 촬영이 완료되었습니다. 필요한 사진만 다시 촬영하거나 저장해 주세요.");
+      }
     } catch (error) {
       if (!cancelledRef.current) {
         setErrorMessage("자동 촬영 중 문제가 발생했습니다. 다시 시도해 주세요.");
@@ -425,22 +442,11 @@ export function FaceRegistrationFlow() {
   };
 
   const saveProfile = async () => {
-    if (!currentUser) {
-      setErrorMessage("로그인 정보를 확인할 수 없습니다. 다시 로그인해 주세요.");
-      return;
-    }
-
     if (!canSave) {
       setErrorMessage("정면 3장 촬영을 완료한 뒤 최종 저장할 수 있습니다.");
       return;
     }
-
-    createFaceProfile(currentUser.id, snapshotBlobIds);
-    refresh();
-    setProfileSaved(true);
-    setStatusMessage(`${currentUser.name}님의 정면 사진 3장이 등록되었습니다.`);
-    await playCompleteSound();
-    await speak("최종 저장이 완료되었습니다.");
+    await persistFaceProfile(snapshotBlobIds);
   };
 
   const submitSelection = () => {
