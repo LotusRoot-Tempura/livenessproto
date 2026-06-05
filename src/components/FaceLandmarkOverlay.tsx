@@ -126,6 +126,29 @@ const EYE_FEATURE_LINKS = new Set([
   "374-362",
 ]);
 
+const RENDER_POINTS = Array.from(
+  new Set([
+    ...FEATURE_POINTS,
+    ...LEFT_EYEBROW,
+    ...RIGHT_EYEBROW,
+    ...LEFT_IRIS,
+    ...RIGHT_IRIS,
+    ...NOSE_BRIDGE,
+    2,
+    ...OUTER_LIPS,
+  ]),
+);
+
+const RENDER_LINKS: [number, number][] = [
+  ...FEATURE_LINKS,
+  ...LEFT_EYEBROW.slice(0, -1).map((point, index) => [point, LEFT_EYEBROW[index + 1]] as [number, number]),
+  ...RIGHT_EYEBROW.slice(0, -1).map((point, index) => [point, RIGHT_EYEBROW[index + 1]] as [number, number]),
+  ...LEFT_IRIS.slice(0, -1).map((point, index) => [point, LEFT_IRIS[index + 1]] as [number, number]),
+  ...RIGHT_IRIS.slice(0, -1).map((point, index) => [point, RIGHT_IRIS[index + 1]] as [number, number]),
+  ...NOSE_BRIDGE.slice(0, -1).map((point, index) => [point, NOSE_BRIDGE[index + 1]] as [number, number]),
+  ...OUTER_LIPS.slice(0, -1).map((point, index) => [point, OUTER_LIPS[index + 1]] as [number, number]),
+];
+
 export type FaceFeatureMetrics = {
   pointValues: number[];
   lineValues: number[];
@@ -284,7 +307,7 @@ function drawConnections(
   ctx.shadowColor = glowColor;
   ctx.shadowBlur = ready ? 6 : 4;
 
-  for (const [startIndex, endIndex] of FEATURE_LINKS) {
+  for (const [startIndex, endIndex] of RENDER_LINKS) {
     const start = landmarks[startIndex];
     const end = landmarks[endIndex];
     if (!start || !end) continue;
@@ -306,12 +329,12 @@ function drawConnections(
 
   ctx.shadowBlur = ready ? 8 : 6;
   ctx.fillStyle = pointColor;
-  for (const index of FEATURE_POINTS) {
+  for (const index of RENDER_POINTS) {
     const point = landmarks[index];
     if (!point) continue;
     const mapped = mapPoint(point, video, canvas);
     ctx.beginPath();
-    ctx.arc(mapped.x, mapped.y, ready ? 2.6 : 2.4, 0, Math.PI * 2);
+    ctx.arc(mapped.x, mapped.y, ready ? 2.2 : 2, 0, Math.PI * 2);
     ctx.fill();
   }
 

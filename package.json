@@ -1,6 +1,6 @@
 {
   "name": "grab-ticket-face-mvp",
-  "version": "0.1.71",
+  "version": "0.1.105",
   "private": true,
   "scripts": {
     "predev": "node scripts/bump-build-version.mjs",

@@ -9,7 +9,7 @@ export function RoleMenuGrid({
   simple?: boolean;
 }) {
   return (
-    <div className={`menu-grid${simple ? " menu-grid--simple" : ""}`}>
+    <div className={`menu-grid${simple ? " menu-grid--simple menu-grid--stacked" : ""}`}>
       {items.map((item) => (
         <Link key={item.href} href={item.href} className="menu-card">
           <span className="menu-card__label">{item.label}</span>

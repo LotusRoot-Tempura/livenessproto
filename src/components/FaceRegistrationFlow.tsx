@@ -16,23 +16,15 @@ import { StatusCard } from "@/components/StatusCard";
 import { useLocalData } from "@/hooks/useLocalData";
 
 const SNAPSHOT_GUIDES = [
-  "정면 기본",
-  "오른쪽: 코 끝이 조금 옆으로",
-  "오른쪽: 볼선이 더 많이 보이게",
-  "왼쪽: 코 끝이 조금 옆으로",
-  "왼쪽: 볼선이 더 많이 보이게",
-  "턱 약간 위",
-  "턱 약간 아래",
+  "정면 1",
+  "정면 2",
+  "정면 3",
 ];
 
 const ORDINAL_LABELS = [
-  "첫번째",
-  "두번째",
-  "세번째",
-  "네번째",
-  "다섯번째",
-  "여섯번째",
-  "일곱번째",
+  "첫 번째",
+  "두 번째",
+  "세 번째",
 ];
 
 const COUNTDOWN_START = 3;
@@ -75,6 +67,7 @@ export function FaceRegistrationFlow() {
   const [faceFeatureMetrics, setFaceFeatureMetrics] = useState<FaceFeatureMetrics>(EMPTY_FACE_FEATURE_METRICS);
   const [faceFeatureMetricsStatus, setFaceFeatureMetricsStatus] = useState<"idle" | "sampling" | "locked">("idle");
   const [qualityReady, setQualityReady] = useState(false);
+  const [voiceMessage, setVoiceMessage] = useState("음성 안내가 여기 표시됩니다.");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -100,44 +93,24 @@ export function FaceRegistrationFlow() {
   const currentGuideIndex = selectedRetakeIndex ?? stepIndex;
   const currentGuide = SNAPSHOT_GUIDES[Math.min(currentGuideIndex, SNAPSHOT_GUIDES.length - 1)];
   const nextGuide =
-    currentGuideIndex + 1 < SNAPSHOT_GUIDES.length ? SNAPSHOT_GUIDES[currentGuideIndex + 1] : "마지막 포즈";
+    currentGuideIndex + 1 < SNAPSHOT_GUIDES.length ? SNAPSHOT_GUIDES[currentGuideIndex + 1] : "마지막 촬영";
   const isBusy = captureMode !== "idle";
   const canSave = sequenceComplete && snapshotBlobIds.length === SNAPSHOT_GUIDES.length && !profileSaved;
   const samplePoses = [
     {
       label: SNAPSHOT_GUIDES[0],
-      description: "얼굴을 정면으로 두고 카메라를 바로 바라봐 주세요.",
+      description: "얼굴을 정면으로 두고 카메라를 바로 바라보며 첫 번째 사진을 촬영해 주세요.",
       imageSrc: "/sample-poses/01-front.png",
     },
     {
       label: SNAPSHOT_GUIDES[1],
-      description: "얼굴을 오른쪽으로 조금 돌려 코 끝 방향이 살짝 옆으로 보이게 해 주세요.",
-      imageSrc: "/sample-poses/02-right-nose.png",
+      description: "정면을 유지한 채 표정과 시선을 안정적으로 유지하며 두 번째 사진을 촬영해 주세요.",
+      imageSrc: "/sample-poses/01-front.png",
     },
     {
       label: SNAPSHOT_GUIDES[2],
-      description: "얼굴을 오른쪽으로 더 돌려 볼선이 분명하게 보이게 해 주세요.",
-      imageSrc: "/sample-poses/03-right-cheek.png",
-    },
-    {
-      label: SNAPSHOT_GUIDES[3],
-      description: "얼굴을 왼쪽으로 조금 돌려 코 끝 방향이 살짝 옆으로 보이게 해 주세요.",
-      imageSrc: "/sample-poses/04-left-nose.png",
-    },
-    {
-      label: SNAPSHOT_GUIDES[4],
-      description: "얼굴을 왼쪽으로 더 돌려 볼선이 분명하게 보이게 해 주세요.",
-      imageSrc: "/sample-poses/05-left-cheek.png",
-    },
-    {
-      label: SNAPSHOT_GUIDES[5],
-      description: "턱을 살짝 들어 이마와 코 라인이 더 드러나게 해 주세요.",
-      imageSrc: "/sample-poses/06-chin-up.png",
-    },
-    {
-      label: SNAPSHOT_GUIDES[6],
-      description: "턱을 살짝 내려 눈매와 턱선이 또렷하게 보이게 해 주세요.",
-      imageSrc: "/sample-poses/07-chin-down.png",
+      description: "정면을 유지한 채 얼굴이 흔들리지 않도록 하며 세 번째 사진을 촬영해 주세요.",
+      imageSrc: "/sample-poses/01-front.png",
     },
   ] as const;
 
@@ -164,6 +137,7 @@ export function FaceRegistrationFlow() {
 
   const speak = async (text: string) => {
     if (!("speechSynthesis" in window)) return;
+    setVoiceMessage(text);
     window.speechSynthesis.cancel();
 
     await new Promise<void>((resolve) => {
@@ -231,6 +205,7 @@ export function FaceRegistrationFlow() {
     setStatusMessage("새 촬영 세션을 시작할 수 있습니다.");
     setErrorMessage("");
     setQualityReady(false);
+    setVoiceMessage("음성 안내가 여기 표시됩니다.");
   };
 
   const stopCapture = () => {
@@ -245,6 +220,7 @@ export function FaceRegistrationFlow() {
     setCaptureMode("idle");
     setCountdown(null);
     setStatusMessage("촬영이 중단되었습니다.");
+    setVoiceMessage("촬영이 중단되었습니다.");
   };
 
   const startCamera = async () => {
@@ -309,7 +285,7 @@ export function FaceRegistrationFlow() {
 
   const runCountdownForGuide = async (guideLabel: string, guideIndex: number) => {
     setStepIndex(guideIndex);
-    await speak(`${ORDINAL_LABELS[guideIndex]} 포즈. ${guideLabel}. 자세를 맞춰 주세요.`);
+    await speak(`${ORDINAL_LABELS[guideIndex]} 사진입니다. 정면을 유지해 주세요.`);
 
     for (let count = COUNTDOWN_START; count >= 1; count -= 1) {
       if (cancelledRef.current) throw new Error("sequence cancelled");
@@ -358,7 +334,7 @@ export function FaceRegistrationFlow() {
     const previewUrls: string[] = [];
 
     try {
-      await speak("지금부터 자동 촬영을 시작합니다. 포즈 안내에 맞춰 얼굴 방향을 바꿔 주세요.");
+      await speak("지금부터 정면 사진 세 장을 자동 촬영합니다. 얼굴을 정면으로 유지해 주세요.");
 
       for (let step = 0; step < SNAPSHOT_GUIDES.length; step += 1) {
         if (cancelledRef.current) throw new Error("sequence cancelled");
@@ -384,9 +360,9 @@ export function FaceRegistrationFlow() {
       }
 
       setSequenceComplete(true);
-      setStatusMessage("7장 촬영 완료. 필요한 사진만 다시 촬영하거나 최종 저장해 주세요.");
+      setStatusMessage("정면 3장 촬영 완료. 필요한 사진만 다시 촬영하거나 최종 저장해 주세요.");
       await playCompleteSound();
-      await speak("모든 촬영이 완료되었습니다. 재촬영 포즈가 있으면 선택해서 진행해 주셔도 됩니다.");
+      await speak("정면 사진 세 장 촬영이 완료되었습니다. 필요한 사진만 다시 촬영하거나 저장해 주세요.");
     } catch (error) {
       if (!cancelledRef.current) {
         setErrorMessage("자동 촬영 중 문제가 발생했습니다. 다시 시도해 주세요.");
@@ -455,14 +431,14 @@ export function FaceRegistrationFlow() {
     }
 
     if (!canSave) {
-      setErrorMessage("7장 촬영을 완료한 뒤 최종 저장할 수 있습니다.");
+      setErrorMessage("정면 3장 촬영을 완료한 뒤 최종 저장할 수 있습니다.");
       return;
     }
 
     createFaceProfile(currentUser.id, snapshotBlobIds);
     refresh();
     setProfileSaved(true);
-    setStatusMessage(`${currentUser.name}님의 베스트 스냅샷 7장이 등록되었습니다.`);
+    setStatusMessage(`${currentUser.name}님의 정면 사진 3장이 등록되었습니다.`);
     await playCompleteSound();
     await speak("최종 저장이 완료되었습니다.");
   };
@@ -487,6 +463,43 @@ export function FaceRegistrationFlow() {
       {!currentUser ? (
         <EmptyState title="로그인 정보가 없습니다." description="다시 로그인한 뒤 얼굴등록을 진행해 주세요." />
       ) : null}
+      <div className="panel panel--compact face-register-controls face-register-controls--sticky">
+        {currentUser ? (
+          <div className="field field--compact">
+            <label>이용자</label>
+            <div className="list-card__meta">
+              {currentUser.name} / {currentUser.phone} / {currentUser.email}
+            </div>
+            <p className="helper-text helper-text--tight">
+              안경, 선글라스, 마스크, 모자, 얼굴을 가리는 머리카락은 벗거나 정리한 뒤 촬영해 주세요.
+            </p>
+          </div>
+        ) : null}
+
+        <div className="field field--compact">
+          <label>음성 안내</label>
+          <div className="list-card__meta">{voiceMessage}</div>
+        </div>
+
+        <div className="button-row button-row--dense">
+          <Button onClick={startRetake} disabled={!sequenceComplete || selectedRetakeIndex === null || isBusy}>
+            {captureMode === "retake" ? "재촬영 중" : "선택 재촬영"}
+          </Button>
+          <Button onClick={saveProfile} disabled={!canSave || isBusy}>
+            {profileSaved ? "저장 완료" : "최종 저장"}
+          </Button>
+        </div>
+
+        <div className="button-row button-row--dense">
+          <Button variant="secondary" onClick={() => setSampleModalOpen(true)}>
+            샘플보기
+          </Button>
+          <Button onClick={resetSession} variant="secondary">
+            초기화
+          </Button>
+        </div>
+      </div>
+
       <div className="panel panel--compact face-register-summary">
         <div className="face-register-summary__top">
           <strong>빠른 등록</strong>
@@ -509,47 +522,6 @@ export function FaceRegistrationFlow() {
       </div>
 
       {errorMessage ? <StatusCard title="오류 안내" description={errorMessage} tone="danger" /> : null}
-
-      <div className="panel panel--compact face-register-controls">
-        {currentUser ? (
-          <div className="field field--compact">
-            <label>이용자</label>
-            <div className="list-card__meta">
-              {currentUser.name} / {currentUser.phone} / {currentUser.email}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="button-row button-row--dense">
-          <Button onClick={startCamera} disabled={!currentUser || cameraReady || isBusy}>
-            준비
-          </Button>
-          <Button onClick={startAutoSequence} disabled={!cameraReady || !currentUser || isBusy || !qualityReady}>
-            {captureMode === "sequence" ? "진행 중" : "자동촬영"}
-          </Button>
-        </div>
-
-        <div className="button-row button-row--dense">
-          <Button onClick={startRetake} disabled={!sequenceComplete || selectedRetakeIndex === null || isBusy}>
-            {captureMode === "retake" ? "재촬영 중" : "선택 재촬영"}
-          </Button>
-          <Button onClick={saveProfile} disabled={!canSave || isBusy}>
-            {profileSaved ? "저장 완료" : "최종 저장"}
-          </Button>
-        </div>
-
-        <div className="button-row button-row--dense">
-          <Button variant="secondary" onClick={() => setSampleModalOpen(true)}>
-            샘플보기
-          </Button>
-          <Button onClick={stopCapture} variant="danger" disabled={!cameraReady && !isBusy}>
-            중단
-          </Button>
-          <Button onClick={resetSession} variant="secondary">
-            초기화
-          </Button>
-        </div>
-      </div>
 
       <div className="face-register-layout face-register-layout--compact">
         <div className="face-register-visuals">
@@ -575,16 +547,28 @@ export function FaceRegistrationFlow() {
               </div>
               {countdown !== null ? <div className="camera-overlay__count">{countdown}</div> : null}
               {isCapturingFrame ? <div className="camera-overlay__flash">찰칵</div> : null}
+              <div className="camera-overlay__actions">
+                <Button onClick={startCamera} disabled={!currentUser || cameraReady || isBusy}>
+                  준비
+                </Button>
+                <Button onClick={startAutoSequence} disabled={!cameraReady || !currentUser || isBusy || !qualityReady}>
+                  {captureMode === "sequence" ? "진행 중" : "자동촬영"}
+                </Button>
+                <Button onClick={stopCapture} variant="danger" disabled={!cameraReady && !isBusy}>
+                  중단
+                </Button>
+              </div>
             </div>
           </div>
+          <FaceQualityCheck videoRef={videoRef} onReadyStateChange={setQualityReady} />
           <div className="panel panel--compact">
             <div className="face-feature-metrics">
               <strong>얼굴 특징 수치</strong>
-              <div className="list-card__meta">점 {faceFeatureMetrics.pointValues.length}개 합계: {faceFeatureMetrics.pointTotal}</div>
-              <div className="list-card__meta">선 {faceFeatureMetrics.lineValues.length}개 합계: {faceFeatureMetrics.lineTotal}</div>
-              <div className="list-card__meta">총합: {faceFeatureMetrics.total}</div>
               <div className="list-card__meta">
-                상태: {faceFeatureMetricsStatus === "sampling" ? "측정 중..." : faceFeatureMetricsStatus === "locked" ? "평균 확정" : "대기 중"}
+                점 합계: {faceFeatureMetrics.pointValues.length}, {faceFeatureMetrics.pointTotal} / 선 합계: {faceFeatureMetrics.lineValues.length}, {faceFeatureMetrics.lineTotal}
+              </div>
+              <div className="list-card__meta">
+                총합: {faceFeatureMetrics.total} / 상태: {faceFeatureMetricsStatus === "sampling" ? "측정 중..." : faceFeatureMetricsStatus === "locked" ? "평균 확정" : "대기 중"}
               </div>
               {!LANDMARK_OVERLAY_ENABLED ? (
                 <div className="helper-text helper-text--tight">
@@ -594,11 +578,9 @@ export function FaceRegistrationFlow() {
               <div className="helper-text helper-text--tight">점 위치와 연결선 길이를 얼굴 비율 기준으로 환산한 실측형 수치입니다.</div>
             </div>
           </div>
-          <FaceQualityCheck videoRef={videoRef} onReadyStateChange={setQualityReady} />
           <canvas ref={canvasRef} style={{ display: "none" }} />
         </div>
       </div>
-
       <div className="panel panel--compact">
         <div className="face-register-summary__top">
           <strong>재촬영 선택</strong>
@@ -690,7 +672,7 @@ export function FaceRegistrationFlow() {
         <div className="modal-backdrop" role="presentation">
           <div className="sample-modal" role="dialog" aria-modal="true" aria-labelledby="sample-modal-title">
             <div className="sample-modal__header">
-              <strong id="sample-modal-title">포즈 샘플 보기</strong>
+              <strong id="sample-modal-title">정면 촬영 샘플 보기</strong>
               <button
                 type="button"
                 className="ghost-close-button"
@@ -701,7 +683,7 @@ export function FaceRegistrationFlow() {
               </button>
             </div>
             <p className="helper-text helper-text--tight">
-              위에서 내려다보는 기준으로 얼굴 방향을 맞춰 주세요. 코 끝 방향과 볼선 노출 정도를 보고 따라 하면 됩니다.
+              라이브니스 확인이 끝난 뒤 정면 상태를 유지한 채 3장만 촬영합니다. 얼굴이 흔들리지 않게 정면을 유지해 주세요.
             </p>
             <div className="sample-grid">
               {samplePoses.map((pose, index) => (

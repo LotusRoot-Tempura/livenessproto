@@ -81,12 +81,15 @@ export interface StoredFaceCapture {
 
 export interface FaceQualityState {
   detected: boolean;
+  singleFace: boolean;
   centered: boolean;
   properSize: boolean;
+  lightingGood: boolean;
   frontFacing: boolean;
   leftAngle: boolean;
   rightAngle: boolean;
   blinkDetected: boolean;
+  occlusionClear: boolean;
   score: number;
   readyToRecord: boolean;
   message: string;
