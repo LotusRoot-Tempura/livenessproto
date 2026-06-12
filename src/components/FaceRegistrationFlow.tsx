@@ -16,15 +16,23 @@ import { StatusCard } from "@/components/StatusCard";
 import { useLocalData } from "@/hooks/useLocalData";
 
 const SNAPSHOT_GUIDES = [
-  "정면 1",
-  "정면 2",
-  "정면 3",
+  "정면",
+  "오른쪽 코",
+  "오른쪽 볼",
+  "왼쪽 코",
+  "왼쪽 볼",
+  "턱 올림",
+  "턱 내림",
 ];
 
 const ORDINAL_LABELS = [
   "첫 번째",
   "두 번째",
   "세 번째",
+  "네 번째",
+  "다섯 번째",
+  "여섯 번째",
+  "일곱 번째",
 ];
 
 const COUNTDOWN_START = 3;
@@ -104,13 +112,33 @@ export function FaceRegistrationFlow() {
     },
     {
       label: SNAPSHOT_GUIDES[1],
-      description: "정면을 유지한 채 표정과 시선을 안정적으로 유지하며 두 번째 사진을 촬영해 주세요.",
-      imageSrc: "/sample-poses/01-front.png",
+      description: "얼굴을 살짝 오른쪽으로 돌려 코 라인이 보이도록 두 번째 사진을 촬영해 주세요.",
+      imageSrc: "/sample-poses/02-right-nose.png",
     },
     {
       label: SNAPSHOT_GUIDES[2],
-      description: "정면을 유지한 채 얼굴이 흔들리지 않도록 하며 세 번째 사진을 촬영해 주세요.",
-      imageSrc: "/sample-poses/01-front.png",
+      description: "오른쪽 볼 라인이 보이도록 조금 더 돌린 상태로 세 번째 사진을 촬영해 주세요.",
+      imageSrc: "/sample-poses/03-right-cheek.png",
+    },
+    {
+      label: SNAPSHOT_GUIDES[3],
+      description: "얼굴을 살짝 왼쪽으로 돌려 코 라인이 보이도록 네 번째 사진을 촬영해 주세요.",
+      imageSrc: "/sample-poses/04-left-nose.png",
+    },
+    {
+      label: SNAPSHOT_GUIDES[4],
+      description: "왼쪽 볼 라인이 보이도록 조금 더 돌린 상태로 다섯 번째 사진을 촬영해 주세요.",
+      imageSrc: "/sample-poses/05-left-cheek.png",
+    },
+    {
+      label: SNAPSHOT_GUIDES[5],
+      description: "고개를 살짝 들어 턱 아래 윤곽이 보이도록 여섯 번째 사진을 촬영해 주세요.",
+      imageSrc: "/sample-poses/06-chin-up.png",
+    },
+    {
+      label: SNAPSHOT_GUIDES[6],
+      description: "고개를 살짝 내려 눈썹과 코 라인이 보이도록 일곱 번째 사진을 촬영해 주세요.",
+      imageSrc: "/sample-poses/07-chin-down.png",
     },
   ] as const;
 
@@ -197,7 +225,7 @@ export function FaceRegistrationFlow() {
     createFaceProfile(currentUser.id, blobIds);
     refresh();
     setProfileSaved(true);
-    setStatusMessage(`${currentUser.name}님의 정면 사진 3장이 등록되었습니다.`);
+    setStatusMessage(`${currentUser.name}님의 얼굴 사진 7장이 등록되었습니다.`);
     await playCompleteSound();
     await speak("얼굴 등록이 완료되었습니다.");
     return true;
@@ -299,7 +327,7 @@ export function FaceRegistrationFlow() {
 
   const runCountdownForGuide = async (guideLabel: string, guideIndex: number) => {
     setStepIndex(guideIndex);
-    await speak(`${ORDINAL_LABELS[guideIndex]} 사진입니다. 정면을 유지해 주세요.`);
+    await speak(`${ORDINAL_LABELS[guideIndex]} 사진입니다. ${guideLabel} 포즈를 맞춰 주세요.`);
 
     for (let count = COUNTDOWN_START; count >= 1; count -= 1) {
       if (cancelledRef.current) throw new Error("sequence cancelled");
@@ -348,7 +376,7 @@ export function FaceRegistrationFlow() {
     const previewUrls: string[] = [];
 
     try {
-      await speak("지금부터 정면 사진 세 장을 자동 촬영합니다. 얼굴을 정면으로 유지해 주세요.");
+      await speak("지금부터 얼굴 사진 일곱 장을 순서대로 자동 촬영합니다. 안내 포즈를 맞춰 주세요.");
 
       for (let step = 0; step < SNAPSHOT_GUIDES.length; step += 1) {
         if (cancelledRef.current) throw new Error("sequence cancelled");
@@ -376,9 +404,9 @@ export function FaceRegistrationFlow() {
       setSequenceComplete(true);
       const saved = await persistFaceProfile(capturedBlobIds);
       if (!saved) {
-        setStatusMessage("정면 3장 촬영 완료. 필요한 사진만 다시 촬영하거나 최종 저장해 주세요.");
+        setStatusMessage("7장 촬영 완료. 필요한 사진만 다시 촬영하거나 최종 저장해 주세요.");
         await playCompleteSound();
-        await speak("정면 사진 세 장 촬영이 완료되었습니다. 필요한 사진만 다시 촬영하거나 저장해 주세요.");
+        await speak("얼굴 사진 일곱 장 촬영이 완료되었습니다. 필요한 사진만 다시 촬영하거나 저장해 주세요.");
       }
     } catch (error) {
       if (!cancelledRef.current) {
@@ -443,7 +471,7 @@ export function FaceRegistrationFlow() {
 
   const saveProfile = async () => {
     if (!canSave) {
-      setErrorMessage("정면 3장 촬영을 완료한 뒤 최종 저장할 수 있습니다.");
+      setErrorMessage("7장 촬영을 완료한 뒤 최종 저장할 수 있습니다.");
       return;
     }
     await persistFaceProfile(snapshotBlobIds);
@@ -689,7 +717,7 @@ export function FaceRegistrationFlow() {
               </button>
             </div>
             <p className="helper-text helper-text--tight">
-              라이브니스 확인이 끝난 뒤 정면 상태를 유지한 채 3장만 촬영합니다. 얼굴이 흔들리지 않게 정면을 유지해 주세요.
+              라이브니스 확인이 끝난 뒤 안내되는 각 포즈에 맞춰 7장을 촬영합니다. 얼굴이 흔들리지 않게 천천히 자세를 맞춰 주세요.
             </p>
             <div className="sample-grid">
               {samplePoses.map((pose, index) => (
