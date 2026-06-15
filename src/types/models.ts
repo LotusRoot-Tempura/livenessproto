@@ -40,6 +40,7 @@ export interface Ticket {
   seatNo: string;
   buyerId: string;
   holderUserId: string;
+  qrHash?: string;
   status: TicketStatus;
   createdAt: string;
 }

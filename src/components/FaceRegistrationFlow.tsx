@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuid } from "uuid";
 import { getCurrentUserAccount } from "@/lib/auth";
 import { createFaceProfile, deleteFaceProfile } from "@/lib/mock";
+import { ApiError, apiRegisterFace } from "@/lib/api";
 import { mediaDb } from "@/lib/db";
 import { localStore } from "@/lib/storage";
 import { blobToDataUrl, formatDateTime } from "@/lib/utils";
@@ -219,6 +220,23 @@ export function FaceRegistrationFlow() {
 
   const persistFaceProfile = async (blobIds: string[]) => {
     if (!currentUser || blobIds.length !== SNAPSHOT_GUIDES.length) {
+      return false;
+    }
+
+    // 백엔드로 7장 업로드 → InsightFace 임베딩 추출·검증 후 저장(status=ready)
+    try {
+      const blobs = (await Promise.all(blobIds.map((id) => mediaDb.getImage(id)))).filter(
+        (blob): blob is Blob => Boolean(blob),
+      );
+      if (blobs.length !== blobIds.length) {
+        setErrorMessage("촬영 이미지를 불러오지 못했습니다. 다시 시도해 주세요.");
+        return false;
+      }
+      await apiRegisterFace(blobs);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof ApiError ? error.message : "백엔드 얼굴 등록에 실패했습니다. 다시 시도해 주세요.",
+      );
       return false;
     }
 
