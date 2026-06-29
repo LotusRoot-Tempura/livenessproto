@@ -10,10 +10,17 @@ import {
   getRoleSession,
   getUserAccounts,
   setRoleSession,
-  validateUserLogin,
 } from "@/lib/auth";
-import { createUser } from "@/lib/mock";
+import { ApiError, apiLogin, apiSignup, saveTokens } from "@/lib/api";
+import { localStore } from "@/lib/storage";
 import type { AppRole } from "@/lib/constants";
+import type { User } from "@/types/models";
+
+// 백엔드에서 인증된 이용자를 로컬 저장소에도 반영(미러링)해 기존 localStorage 흐름과 호환시킨다.
+function upsertLocalUser(user: User) {
+  const others = localStore.getUsers().filter((u) => u.id !== user.id && u.email !== user.email);
+  localStore.saveUsers([user, ...others]);
+}
 
 type AuthStatus = "checking" | "locked" | "authenticated";
 
@@ -33,6 +40,7 @@ export function RoleAuthGate({ role, children }: { role: AppRole; children: Reac
   const router = useRouter();
   const [status, setStatus] = useState<AuthStatus>("checking");
   const [errorMessage, setErrorMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [userAuthMode, setUserAuthMode] = useState<"login" | "signup">("login");
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [showSignupPasswordConfirm, setShowSignupPasswordConfirm] = useState(false);
@@ -85,7 +93,7 @@ export function RoleAuthGate({ role, children }: { role: AppRole; children: Reac
     };
   }, [role]);
 
-  const handleUserSignup = (event: FormEvent<HTMLFormElement>) => {
+  const handleUserSignup = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const { email, name, phone, password, passwordConfirm } = signupForm;
     if (!email || !name || !phone || !password) return;
@@ -94,35 +102,55 @@ export function RoleAuthGate({ role, children }: { role: AppRole; children: Reac
       return;
     }
 
-    const created = createUser({ email, name, phone, password });
-    setRoleSession("user", {
-      email: created.email,
-      userId: created.id,
-      loggedInAt: new Date().toISOString(),
-    });
-    setUserAuthMode("login");
-    setStatus("authenticated");
-    setErrorMessage("");
-    router.replace("/user/face-register");
+    setSubmitting(true);
+    try {
+      // 백엔드에 회원가입 → 곧바로 로그인하여 JWT 토큰 발급
+      await apiSignup({ email, name, phone, password });
+      const { user, tokens } = await apiLogin({ email, password });
+      saveTokens(tokens);
+      upsertLocalUser(user);
+      setRoleSession("user", {
+        email: user.email,
+        userId: user.id,
+        loggedInAt: new Date().toISOString(),
+      });
+      setUserAuthMode("login");
+      setStatus("authenticated");
+      setErrorMessage("");
+      router.replace("/user/face-register");
+    } catch (error) {
+      setErrorMessage(error instanceof ApiError ? error.message : "회원가입에 실패했습니다.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleUserLogin = (event: FormEvent<HTMLFormElement>) => {
+  const handleUserLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const matched = validateUserLogin(loginForm.email, loginForm.password);
-    if (!matched) {
-      setErrorMessage("이메일 또는 비밀번호를 다시 확인해 주세요.");
-      return;
+    setSubmitting(true);
+    try {
+      const { user, tokens } = await apiLogin({
+        email: loginForm.email,
+        password: loginForm.password,
+      });
+      saveTokens(tokens);
+      upsertLocalUser(user);
+      setRoleSession("user", {
+        email: user.email,
+        userId: user.id,
+        loggedInAt: new Date().toISOString(),
+      });
+      setUserAuthMode("login");
+      setStatus("authenticated");
+      setErrorMessage("");
+      router.replace("/user/face-register");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof ApiError ? error.message : "이메일 또는 비밀번호를 다시 확인해 주세요.",
+      );
+    } finally {
+      setSubmitting(false);
     }
-
-    setRoleSession("user", {
-      email: matched.email,
-      userId: matched.id,
-      loggedInAt: new Date().toISOString(),
-    });
-    setUserAuthMode("login");
-    setStatus("authenticated");
-    setErrorMessage("");
-    router.replace("/user/face-register");
   };
 
   const handleFixedLogin = (event: FormEvent<HTMLFormElement>) => {
@@ -218,7 +246,7 @@ export function RoleAuthGate({ role, children }: { role: AppRole; children: Reac
             </div>
           </div>
           {errorMessage ? <p className="helper-text">{errorMessage}</p> : null}
-          <Button type="submit">회원가입</Button>
+          <Button type="submit" disabled={submitting}>{submitting ? "처리 중…" : "회원가입"}</Button>
           {hasUserAccounts ? (
             <Button
               type="button"
@@ -263,7 +291,7 @@ export function RoleAuthGate({ role, children }: { role: AppRole; children: Reac
           </div>
         </div>
         {errorMessage ? <p className="helper-text">{errorMessage}</p> : null}
-        <Button type="submit">로그인</Button>
+        <Button type="submit" disabled={submitting}>{submitting ? "처리 중…" : "로그인"}</Button>
         {role === "user" ? (
           <Button
             type="button"

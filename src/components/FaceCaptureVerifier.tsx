@@ -3,11 +3,25 @@
 import { useEffect, useRef, useState } from "react";
 import { v4 as uuid } from "uuid";
 import { mediaDb } from "@/lib/db";
-import { blobToDataUrl, getEntryResult, getResultTone } from "@/lib/utils";
-import { createEntryLog, createFaceCapture } from "@/lib/mock";
+import { blobToDataUrl } from "@/lib/utils";
+import { createFaceCapture } from "@/lib/mock";
+import { ApiError, FaceVerifyResult, apiVerifyFace } from "@/lib/api";
 import { Button } from "@/components/Button";
 import { StatusCard } from "@/components/StatusCard";
 import type { Ticket } from "@/types/models";
+
+const VERDICT_TEXT: Record<FaceVerifyResult["verdict"], string> = {
+  allowed: "입장 가능",
+  manual_review: "관리자 확인 필요",
+  denied: "입장 불가",
+  spoof: "위조 감지 (사진·화면)",
+};
+
+function verdictTone(verdict: FaceVerifyResult["verdict"]): "success" | "warning" | "danger" {
+  if (verdict === "allowed") return "success";
+  if (verdict === "manual_review") return "warning";
+  return "danger";
+}
 
 export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -15,8 +29,9 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
   const [previewUrl, setPreviewUrl] = useState("");
-  const [resultText, setResultText] = useState("");
-  const [similarity, setSimilarity] = useState<number | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [result, setResult] = useState<FaceVerifyResult | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
     if (!cameraOn || !videoRef.current || !streamRef.current) return;
@@ -34,8 +49,8 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
 
   const startCamera = async () => {
     setPreviewUrl("");
-    setSimilarity(null);
-    setResultText("");
+    setResult(null);
+    setErrorMessage("");
 
     if (!streamRef.current) {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -67,34 +82,33 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
     await mediaDb.saveImage(blobId, blob);
     createFaceCapture(ticket.id, ticket.holderUserId, blobId);
     setPreviewUrl(await blobToDataUrl(blob));
-
-    const mockSimilarity = Math.floor(55 + Math.random() * 45);
-    const result = getEntryResult(mockSimilarity);
-
-    createEntryLog({
-      ticketId: ticket.id,
-      holderUserId: ticket.holderUserId,
-      qrValid: true,
-      zkValid: true,
-      faceSimilarity: mockSimilarity,
-      result,
-    });
-
-    setSimilarity(mockSimilarity);
-    setResultText(
-      result === "allowed" ? "입장 가능" : result === "manual_review" ? "관리자 확인 필요" : "입장 불가",
-    );
     setCameraOn(false);
+
+    // 백엔드 1:1 얼굴 비교(holder 등록 임베딩 대조) + 입장 처리 + EntryLog 기록
+    setVerifying(true);
+    setErrorMessage("");
+    try {
+      const verifyResult = await apiVerifyFace(ticket.id, blob);
+      setResult(verifyResult);
+    } catch (error) {
+      setResult(null);
+      setErrorMessage(error instanceof ApiError ? error.message : "얼굴 인증에 실패했습니다.");
+    } finally {
+      setVerifying(false);
+    }
   };
+
+  const similarityPercent =
+    result?.similarity !== undefined ? Math.round(result.similarity * 100) : null;
 
   return (
     <div className="list list--compact">
       <div className="button-row button-row--dense">
-        <Button onClick={startCamera}>
+        <Button onClick={startCamera} disabled={verifying}>
           {previewUrl ? "재촬영하기" : "얼굴촬영"}
         </Button>
         {cameraOn ? (
-          <Button onClick={capture} variant="secondary">
+          <Button onClick={capture} variant="secondary" disabled={verifying}>
             촬영하기
           </Button>
         ) : null}
@@ -106,11 +120,17 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
       ) : null}
       <canvas ref={canvasRef} style={{ display: "none" }} />
       {previewUrl ? <img src={previewUrl} alt="capture preview" className="preview-image preview-image--compact" /> : null}
-      {similarity !== null ? (
+      {verifying ? <StatusCard title="얼굴 인증 중…" description="등록된 구매자 얼굴과 비교하고 있습니다." tone="info" /> : null}
+      {errorMessage ? <StatusCard title="얼굴 인증 실패" description={errorMessage} tone="danger" /> : null}
+      {result ? (
         <StatusCard
-          title={`${similarity}% / ${resultText}`}
-          description="실제 AI 비교 대신 유사도 기반 mock 판정으로 기록했습니다."
-          tone={getResultTone(getEntryResult(similarity))}
+          title={`${VERDICT_TEXT[result.verdict]}${similarityPercent !== null ? ` (유사도 ${similarityPercent}%)` : ""}`}
+          description={
+            result.verdict === "spoof"
+              ? "사진·화면 위조로 판정되어 입장이 차단되었습니다."
+              : `백엔드 1:1 얼굴 대조 결과입니다. (verified: ${result.verified ? "통과" : "미통과"})`
+          }
+          tone={verdictTone(result.verdict)}
         />
       ) : null}
     </div>

@@ -1,13 +1,14 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import QRCode from "react-qr-code";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { useLocalData } from "@/hooks/useLocalData";
 import { getCurrentUserAccount } from "@/lib/auth";
-import { MAX_TICKETS_PER_BUYER_PER_PERFORMANCE, cancelTicket, createTicketsForPurchase } from "@/lib/mock";
+import { MAX_TICKETS_PER_BUYER_PER_PERFORMANCE, cancelTicket } from "@/lib/mock";
+import { ApiError, apiListPerformances, apiOrderTickets, generateQrHash } from "@/lib/api";
 import { localStore } from "@/lib/storage";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import type { Performance, Ticket } from "@/types/models";
@@ -73,6 +74,22 @@ export function TicketCreator() {
   const { data: tickets, refresh: refreshTickets } = useLocalData(() => localStore.getTickets(), [], []);
   const currentUser = getCurrentUserAccount();
   const [errorMessage, setErrorMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  // 백엔드 공연 목록을 불러와 로컬에 동기화(미러링) → 기존 선택 UI가 백엔드 ID를 사용하게 한다.
+  useEffect(() => {
+    let active = true;
+    apiListPerformances()
+      .then((list) => {
+        if (active) localStore.savePerformances(list);
+      })
+      .catch(() => {
+        // 백엔드 연결 실패 시 기존 로컬 데이터를 유지한다.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   const [pendingCancelTicket, setPendingCancelTicket] = useState<Ticket | null>(null);
   const [form, setForm] = useState({
     eventName: "",
@@ -160,22 +177,20 @@ export function TicketCreator() {
     );
   }, [currentUser, faceProfiles]);
 
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     if (!currentUser || !selectedPerformance || maxPurchasable === 0) {
       return;
     }
 
+    setSubmitting(true);
     try {
-      createTicketsForPurchase({
-        id: selectedPerformance.id,
-        buyerId: currentUser.id,
-        eventName: selectedPerformance.eventName,
-        eventDate: selectedPerformance.eventDate,
-        seatCount: selectedPerformance.seatCount,
-        quantity: selectedQuantity,
-      });
+      // 티켓별 QR 해시를 프론트에서 생성해 함께 전송(백엔드 저장 → 입장 시 대조)
+      const qrHashes = Array.from({ length: selectedQuantity }, () => generateQrHash());
+      // 백엔드 주문(좌석 자동배정·3장 제한·정원·얼굴 검사는 서버가 수행) → 결과를 로컬에 반영
+      const created = await apiOrderTickets(selectedPerformance.id, selectedQuantity, qrHashes);
+      localStore.saveTickets([...created, ...localStore.getTickets()]);
       setErrorMessage("");
       refreshTickets();
       setForm({
@@ -185,7 +200,9 @@ export function TicketCreator() {
         quantity: "1",
       });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "티켓을 생성하지 못했습니다.");
+      setErrorMessage(error instanceof ApiError ? error.message : "티켓을 생성하지 못했습니다.");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -230,9 +247,9 @@ export function TicketCreator() {
                   {formatDate(ticket.eventDate)} / {ticket.seatNo}
                 </p>
                 <div style={{ background: "#ffffff", padding: 16, borderRadius: 16, width: "fit-content" }}>
-                  <QRCode value={ticket.id} size={180} />
+                  <QRCode value={ticket.qrHash ?? ticket.id} size={180} />
                 </div>
-                <p className="helper-text">QR에는 ticketId만 포함됩니다.</p>
+                <p className="helper-text">QR에는 입장 확인용 해시가 포함됩니다.</p>
                 <p className="list-card__meta">생성일: {formatDateTime(ticket.createdAt)}</p>
               </article>
             ))}
@@ -346,8 +363,8 @@ export function TicketCreator() {
 
         {errorMessage ? <p className="helper-text">{errorMessage}</p> : null}
 
-        <Button type="submit" disabled={!selectedPerformance || maxPurchasable === 0}>
-          티켓구매
+        <Button type="submit" disabled={!selectedPerformance || maxPurchasable === 0 || submitting}>
+          {submitting ? "구매 중…" : "티켓구매"}
         </Button>
       </form>
 
@@ -360,9 +377,9 @@ export function TicketCreator() {
                 <p className="list-card__meta">좌석: {ticket.seatNo} / 상태: {ticket.status}</p>
                 <p className="helper-text">{getTicketScheduleLabel(ticket, performances)}</p>
                 <div className="ticket-card__qr">
-                  <QRCode value={ticket.id} size={148} />
+                  <QRCode value={ticket.qrHash ?? ticket.id} size={148} />
                 </div>
-                <p className="helper-text">QR에는 ticketId만 포함됩니다.</p>
+                <p className="helper-text">QR에는 입장 확인용 해시가 포함됩니다.</p>
                 <div className="button-row">
                   {ticket.status === "cancelled" ? (
                     <span className="ticket-action-badge">취소 완료</span>
