@@ -10,50 +10,18 @@ const SESSION_KEYS = {
   "tablet-admin": "gtf_session_tablet_admin",
 } as const satisfies Record<AppRole, string>;
 
-const ROLE_CREDENTIAL_KEYS = {
-  "venue-tablet": "gtf_credential_venue_tablet",
-  "tablet-admin": "gtf_credential_tablet_admin",
-} as const;
-
-const DEFAULT_ROLE_CREDENTIALS = {
-  "venue-tablet": {
-    email: "grabtick@mail.com",
-    password: "zcbm13579!",
-  },
-  "tablet-admin": {
-    email: "grabtick@mail.com",
-    password: "zcbm13579!",
-  },
-} as const;
-
-export type FixedRole = keyof typeof DEFAULT_ROLE_CREDENTIALS;
-export type RoleCredential = {
+// 테블릿 역할(공연장/관리자)은 이제 백엔드 시드 계정으로 로그인한다.
+// 고정 계정 정보를 담는 read-only 표시용 타입.
+export type RoleAccount = {
   email: string;
-  password: string;
 };
 
 export type RoleSession = {
   email: string;
   loggedInAt: string;
   userId?: string;
+  role?: AppRole;
 };
-
-function readRoleCredential(role: FixedRole): RoleCredential {
-  if (typeof window === "undefined") return DEFAULT_ROLE_CREDENTIALS[role];
-  const raw = window.localStorage.getItem(ROLE_CREDENTIAL_KEYS[role]);
-  if (!raw) return DEFAULT_ROLE_CREDENTIALS[role];
-
-  try {
-    return JSON.parse(raw) as RoleCredential;
-  } catch {
-    return DEFAULT_ROLE_CREDENTIALS[role];
-  }
-}
-
-function writeRoleCredential(role: FixedRole, credential: RoleCredential) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(ROLE_CREDENTIAL_KEYS[role], JSON.stringify(credential));
-}
 
 function readSession(role: AppRole): RoleSession | null {
   if (typeof window === "undefined") return null;
@@ -91,10 +59,6 @@ export function clearRoleSession(role: AppRole) {
   writeSession(role, null);
 }
 
-export function getRoleCredential(role: FixedRole): RoleCredential {
-  return readRoleCredential(role);
-}
-
 export function getUserAccounts() {
   return localStore.getUsers().filter((user) => Boolean(user.password));
 }
@@ -116,13 +80,10 @@ export function getCurrentUserAccount(): User | null {
   return getUserAccounts().find((user) => user.id === session.userId && user.email === session.email) ?? null;
 }
 
-export function getCurrentRoleAccount(role: FixedRole): RoleCredential | null {
+export function getCurrentRoleAccount(role: AppRole): RoleAccount | null {
   const session = getRoleSession(role);
-  if (!session) return null;
-
-  const credential = getRoleCredential(role);
-  if (credential.email !== session.email) return null;
-  return credential;
+  if (!session || session.role !== role) return null;
+  return { email: session.email };
 }
 
 export function updateCurrentUserPassword(nextPassword: string): User | null {
@@ -138,13 +99,6 @@ export function updateCurrentUserPassword(nextPassword: string): User | null {
   return updatedUser;
 }
 
-export function updateRolePassword(role: FixedRole, nextPassword: string): RoleCredential {
-  const current = getRoleCredential(role);
-  const updated = { ...current, password: nextPassword };
-  writeRoleCredential(role, updated);
-  return updated;
-}
-
 export function isRoleAuthenticated(role: AppRole): boolean {
   const session = getRoleSession(role);
   if (!session) return false;
@@ -153,6 +107,6 @@ export function isRoleAuthenticated(role: AppRole): boolean {
     return getUserAccounts().some((user) => user.id === session.userId && user.email === session.email);
   }
 
-  const fixed = getRoleCredential(role);
-  return Boolean(fixed && session.email === fixed.email);
+  // 테블릿 역할: 백엔드 로그인 시 저장한 세션 role 이 일치하면 인증됨
+  return session.role === role;
 }

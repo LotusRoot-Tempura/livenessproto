@@ -6,7 +6,6 @@ import { Button } from "@/components/Button";
 import { PageSection } from "@/components/PageSection";
 import {
   AUTH_STATE_EVENT,
-  getRoleCredential,
   getRoleSession,
   getUserAccounts,
   setRoleSession,
@@ -78,8 +77,8 @@ export function RoleAuthGate({ role, children }: { role: AppRole; children: Reac
         return;
       }
 
-      const fixed = getRoleCredential(role);
-      const valid = Boolean(session && session.email === fixed.email);
+      // 테블릿 역할: 백엔드 로그인 시 저장한 세션 role 이 일치해야 인증
+      const valid = Boolean(session && session.role === role);
       setStatus(valid ? "authenticated" : "locked");
     };
 
@@ -112,6 +111,7 @@ export function RoleAuthGate({ role, children }: { role: AppRole; children: Reac
       setRoleSession("user", {
         email: user.email,
         userId: user.id,
+        role: "user",
         loggedInAt: new Date().toISOString(),
       });
       setUserAuthMode("login");
@@ -138,6 +138,7 @@ export function RoleAuthGate({ role, children }: { role: AppRole; children: Reac
       setRoleSession("user", {
         email: user.email,
         userId: user.id,
+        role: "user",
         loggedInAt: new Date().toISOString(),
       });
       setUserAuthMode("login");
@@ -153,21 +154,37 @@ export function RoleAuthGate({ role, children }: { role: AppRole; children: Reac
     }
   };
 
-  const handleFixedLogin = (event: FormEvent<HTMLFormElement>) => {
+  const handleFixedLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const fixed = getRoleCredential(role as "venue-tablet" | "tablet-admin");
-    if (!fixed || loginForm.email !== fixed.email || loginForm.password !== fixed.password) {
-      setErrorMessage("이메일 또는 비밀번호를 다시 확인해 주세요.");
-      return;
-    }
+    setSubmitting(true);
+    try {
+      const { user, tokens } = await apiLogin({
+        email: loginForm.email,
+        password: loginForm.password,
+      });
+      // 로그인한 계정의 권한이 이 화면의 역할과 일치하는지 검증
+      if (user.role !== role) {
+        setErrorMessage("이 계정은 해당 권한으로 로그인할 수 없습니다.");
+        return;
+      }
 
-    setRoleSession(role, {
-      email: loginForm.email,
-      loggedInAt: new Date().toISOString(),
-    });
-    setStatus("authenticated");
-    setErrorMessage("");
-    router.replace(role === "venue-tablet" ? "/venue/qr-scan" : "/admin/members");
+      saveTokens(tokens);
+      setRoleSession(role, {
+        email: user.email,
+        userId: user.id,
+        role,
+        loggedInAt: new Date().toISOString(),
+      });
+      setStatus("authenticated");
+      setErrorMessage("");
+      router.replace(role === "venue-tablet" ? "/venue/qr-scan" : "/admin/members");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof ApiError ? error.message : "이메일 또는 비밀번호를 다시 확인해 주세요.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (status === "checking") {

@@ -3,11 +3,14 @@ export type FaceProfileStatus = "ready" | "pending" | "rejected";
 export type EntryResult = "allowed" | "manual_review" | "denied";
 export type PerformanceStatus = "운영" | "보류" | "종료";
 
+export type UserRole = "user" | "venue-tablet" | "tablet-admin";
+
 export interface User {
   id: string;
   name: string;
   email: string;
   phone: string;
+  role?: UserRole;
   password?: string;
   createdAt: string;
 }
