@@ -23,6 +23,7 @@ type ApiUser = {
   email: string;
   name: string;
   phone: string;
+  role: User["role"];
   has_face: boolean;
   created_at: string;
 };
@@ -33,6 +34,7 @@ function mapUser(api: ApiUser, password?: string): User {
     name: api.name,
     email: api.email,
     phone: api.phone,
+    role: api.role,
     password,
     createdAt: api.created_at,
   };
