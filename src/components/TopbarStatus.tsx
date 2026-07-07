@@ -2,13 +2,22 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { APP_VERSION } from "@/lib/appVersion";
-import { AUTH_STATE_EVENT, getRoleSession, type RoleSession } from "@/lib/auth";
-import { getRoleByPathname, getRoleLabel } from "@/lib/constants";
+import { clearTokens } from "@/lib/api";
+import { AUTH_STATE_EVENT, clearRoleSession, getRoleSession, type RoleSession } from "@/lib/auth";
+import { getRoleByPathname, getRoleLabel, type AppRole } from "@/lib/constants";
+
+// 로그아웃 후 이동할 역할별 첫 화면 (프로필 화면의 로그아웃 동작과 동일)
+const ROLE_HOME: Record<AppRole, string> = {
+  user: "/user/face-register",
+  "venue-tablet": "/venue/qr-scan",
+  "tablet-admin": "/admin/members",
+};
 
 export function TopbarStatus() {
   const pathname = usePathname();
+  const router = useRouter();
   const role = getRoleByPathname(pathname);
   const label = getRoleLabel(role);
   const [session, setSession] = useState<RoleSession | null>(null);
@@ -25,6 +34,14 @@ export function TopbarStatus() {
       window.removeEventListener("storage", sync);
     };
   }, [role]);
+
+  const handleLogout = () => {
+    if (!role) return;
+    clearRoleSession(role);
+    // JWT는 이용자 API(얼굴등록/주문)에서만 사용 — 이용자 로그아웃 시 폐기
+    if (role === "user") clearTokens();
+    router.replace(ROLE_HOME[role]);
+  };
 
   return (
     <div className="topbar-status-wrap">
@@ -53,6 +70,9 @@ export function TopbarStatus() {
             <span className="topbar-account__caption">id</span>{" "}
             <code className="topbar-account__code">{session.userId ?? "-"}</code>
           </span>
+          <button type="button" className="topbar-account__logout" onClick={handleLogout}>
+            로그아웃
+          </button>
         </div>
       ) : null}
     </div>
