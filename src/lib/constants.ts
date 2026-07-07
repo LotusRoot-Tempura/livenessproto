@@ -65,6 +65,7 @@ export const TABLET_ADMIN_MENU_ITEMS: readonly NavItem[] = [
   { href: "/admin/members", label: "회원목록", description: "등록된 회원 목록을 확인합니다." },
   { href: "/admin/performances", label: "공연등록", description: "공연장과 공연 정보를 등록합니다." },
   { href: "/admin/tickets", label: "티겟등록", description: "생성된 티켓을 관리합니다." },
+  { href: "/admin/qr-scan", label: "입장확인", description: "티켓 QR 스캔과 얼굴 인증으로 입장을 확인합니다." },
   { href: "/admin/logs", label: "입장로그", description: "입장 결과와 이력을 확인합니다." },
   { href: "/admin/profile", label: "프로필", description: "현재 로그인한 관리자 정보를 확인합니다." },
 ] as const;
