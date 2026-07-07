@@ -133,6 +133,12 @@ export function RoleAuthGate({ role, children }: { role: AppRole; children: Reac
         email: loginForm.email,
         password: loginForm.password,
       });
+      // 테블릿(공연장/관리자) 계정이 이용자 화면으로 들어오는 것을 차단
+      if (user.role && user.role !== "user") {
+        setErrorMessage("이 계정은 해당 권한으로 로그인할 수 없습니다.");
+        return;
+      }
+
       saveTokens(tokens);
       upsertLocalUser(user);
       setRoleSession("user", {
