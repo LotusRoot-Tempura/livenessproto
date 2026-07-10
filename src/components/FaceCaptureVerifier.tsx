@@ -47,18 +47,39 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
     };
   }, []);
 
+  const stopStream = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  };
+
   const startCamera = async () => {
     setPreviewUrl("");
     setResult(null);
     setErrorMessage("");
 
     if (!streamRef.current) {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
-        audio: false,
-      });
-
-      streamRef.current = stream;
+      try {
+        streamRef.current = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false,
+        });
+      } catch (firstError) {
+        // 직전 QR 스캔이 카메라를 아직 쥐고 있거나 전면 카메라가 없는 기기 대응:
+        // 잠시 대기 후 제약 없이 1회 재시도한다.
+        try {
+          stopStream();
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          streamRef.current = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        } catch {
+          const name = firstError instanceof DOMException ? firstError.name : "";
+          setErrorMessage(
+            name === "NotAllowedError"
+              ? "카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라 권한을 허용해 주세요."
+              : "카메라를 시작할 수 없습니다. 다른 앱/탭이 카메라를 사용 중인지 확인 후 다시 시도해 주세요.",
+          );
+          return;
+        }
+      }
     }
 
     setCameraOn(true);
@@ -66,6 +87,12 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
 
   const capture = async () => {
     if (!videoRef.current || !canvasRef.current) return;
+
+    // 비디오 프레임이 아직 준비되지 않았으면(크기 0) 촬영 불가 — 안내 후 중단
+    if (!videoRef.current.videoWidth || !videoRef.current.videoHeight) {
+      setErrorMessage("카메라 영상이 아직 준비되지 않았습니다. 잠시 후 다시 촬영해 주세요.");
+      return;
+    }
 
     const canvas = canvasRef.current;
     canvas.width = videoRef.current.videoWidth;
@@ -76,7 +103,10 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
 
     context.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
-    if (!blob) return;
+    if (!blob) {
+      setErrorMessage("촬영 이미지를 생성하지 못했습니다. 다시 시도해 주세요.");
+      return;
+    }
 
     const blobId = uuid();
     await mediaDb.saveImage(blobId, blob);
