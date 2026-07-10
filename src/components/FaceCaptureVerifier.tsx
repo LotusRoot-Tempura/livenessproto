@@ -28,6 +28,7 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
   const [previewUrl, setPreviewUrl] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [result, setResult] = useState<FaceVerifyResult | null>(null);
@@ -37,7 +38,9 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
     if (!cameraOn || !videoRef.current || !streamRef.current) return;
 
     videoRef.current.srcObject = streamRef.current;
-    void videoRef.current.play();
+    videoRef.current.play().catch(() => {
+      // iOS 자동재생 정책 등으로 거부될 수 있음 — autoPlay 속성이 재시도한다.
+    });
   }, [cameraOn]);
 
   useEffect(() => {
@@ -47,18 +50,40 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
     };
   }, []);
 
+  const stopStream = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  };
+
   const startCamera = async () => {
     setPreviewUrl("");
     setResult(null);
     setErrorMessage("");
+    setVideoReady(false);
 
     if (!streamRef.current) {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
-        audio: false,
-      });
-
-      streamRef.current = stream;
+      try {
+        streamRef.current = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false,
+        });
+      } catch (firstError) {
+        // 직전 QR 스캔이 카메라를 아직 쥐고 있거나 전면 카메라가 없는 기기 대응:
+        // 잠시 대기 후 제약 없이 1회 재시도한다.
+        try {
+          stopStream();
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          streamRef.current = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        } catch {
+          const name = firstError instanceof DOMException ? firstError.name : "";
+          setErrorMessage(
+            name === "NotAllowedError"
+              ? "카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라 권한을 허용해 주세요."
+              : "카메라를 시작할 수 없습니다. 다른 앱/탭이 카메라를 사용 중인지 확인 후 다시 시도해 주세요.",
+          );
+          return;
+        }
+      }
     }
 
     setCameraOn(true);
@@ -66,6 +91,12 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
 
   const capture = async () => {
     if (!videoRef.current || !canvasRef.current) return;
+
+    // 비디오 프레임이 아직 준비되지 않았으면(크기 0) 촬영 불가 — 안내 후 중단
+    if (!videoRef.current.videoWidth || !videoRef.current.videoHeight) {
+      setErrorMessage("카메라 영상이 아직 준비되지 않았습니다. 잠시 후 다시 촬영해 주세요.");
+      return;
+    }
 
     const canvas = canvasRef.current;
     canvas.width = videoRef.current.videoWidth;
@@ -76,13 +107,27 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
 
     context.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
-    if (!blob) return;
+    if (!blob) {
+      setErrorMessage("촬영 이미지를 생성하지 못했습니다. 다시 시도해 주세요.");
+      return;
+    }
 
-    const blobId = uuid();
-    await mediaDb.saveImage(blobId, blob);
-    createFaceCapture(ticket.id, ticket.holderUserId, blobId);
-    setPreviewUrl(await blobToDataUrl(blob));
+    // 로컬 캡처 보관은 부가 기능 — Safari 프라이빗 모드 등에서 IndexedDB 가
+    // 실패해도 인증(verify)은 계속 진행한다.
+    try {
+      const blobId = uuid();
+      await mediaDb.saveImage(blobId, blob);
+      createFaceCapture(ticket.id, ticket.holderUserId, blobId);
+    } catch {
+      // 저장 실패 무시 (검증 흐름에 영향 없음)
+    }
+    try {
+      setPreviewUrl(await blobToDataUrl(blob));
+    } catch {
+      setPreviewUrl("");
+    }
     setCameraOn(false);
+    setVideoReady(false);
 
     // 백엔드 1:1 얼굴 비교(holder 등록 임베딩 대조) + 입장 처리 + EntryLog 기록
     setVerifying(true);
@@ -108,14 +153,22 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
           {previewUrl ? "재촬영하기" : "얼굴촬영"}
         </Button>
         {cameraOn ? (
-          <Button onClick={capture} variant="secondary" disabled={verifying}>
-            촬영하기
+          <Button onClick={capture} variant="secondary" disabled={verifying || !videoReady}>
+            {videoReady ? "촬영하기" : "카메라 준비 중…"}
           </Button>
         ) : null}
       </div>
       {cameraOn ? (
         <div className="camera-frame camera-frame--compact face-capture-frame">
-          <video ref={videoRef} muted playsInline />
+          {/* iOS Safari 는 메타데이터 로드 전 videoWidth=0 — 준비 완료 후에만 촬영 허용 */}
+          <video
+            ref={videoRef}
+            muted
+            playsInline
+            autoPlay
+            onLoadedMetadata={() => setVideoReady(true)}
+            onCanPlay={() => setVideoReady(true)}
+          />
         </div>
       ) : null}
       <canvas ref={canvasRef} style={{ display: "none" }} />

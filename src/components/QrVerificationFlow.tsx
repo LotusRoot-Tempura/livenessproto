@@ -10,15 +10,33 @@ import { StatusCard } from "@/components/StatusCard";
 import { FaceCaptureVerifier } from "@/components/FaceCaptureVerifier";
 import type { Ticket } from "@/types/models";
 
+// html5-qrcode 인스턴스 타입 (동적 import 라 최소 형태만 사용)
+type QrScanner = { stop: () => Promise<void>; clear?: () => void };
+
 export function QrVerificationFlow() {
   const scannerRef = useRef<HTMLDivElement | null>(null);
+  const qrInstanceRef = useRef<QrScanner | null>(null);
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [scannerReady, setScannerReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [scanError, setScanError] = useState("");
 
+  // 스캐너(카메라)를 확실히 해제한다 — 얼굴촬영 단계가 카메라를 이어받을 수 있어야 함
+  const stopScanner = async () => {
+    const instance = qrInstanceRef.current;
+    qrInstanceRef.current = null;
+    if (instance) {
+      try {
+        await instance.stop();
+      } catch {
+        // 이미 정지된 경우 등 — 무시
+      }
+    }
+  };
+
   useEffect(() => {
     return () => {
+      void stopScanner();
       const current = scannerRef.current;
       if (current) current.innerHTML = "";
     };
@@ -66,20 +84,26 @@ export function QrVerificationFlow() {
     try {
       const { Html5Qrcode } = await import("html5-qrcode");
       const readerId = "qr-reader";
+      await stopScanner(); // 이전 스캐너가 있으면 카메라부터 해제
       resetScanResult();
       const scanner = new Html5Qrcode(readerId);
+      qrInstanceRef.current = scanner;
       setScannerReady(true);
       await scanner.start(
         { facingMode: "environment" },
         { fps: 10, qrbox: 220 },
         async (decodedText) => {
-          await scanner.stop();
+          await stopScanner(); // 얼굴촬영이 카메라를 쓸 수 있도록 확실히 해제
           clearScannerFrame();
           setScannerReady(false);
           await checkHash(decodedText);
         },
         () => undefined,
       );
+    } catch {
+      await stopScanner();
+      setScannerReady(false);
+      setScanError("QR 스캐너를 시작할 수 없습니다. 카메라 권한을 확인해 주세요.");
     } finally {
       setLoading(false);
     }
