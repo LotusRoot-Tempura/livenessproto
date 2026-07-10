@@ -6,6 +6,7 @@ import { mediaDb } from "@/lib/db";
 import { blobToDataUrl } from "@/lib/utils";
 import { createFaceCapture } from "@/lib/mock";
 import { ApiError, FaceVerifyResult, apiVerifyFace } from "@/lib/api";
+import { watchForBlink, type BlinkWatcher } from "@/lib/blinkDetector";
 import { Button } from "@/components/Button";
 import { StatusCard } from "@/components/StatusCard";
 import type { Ticket } from "@/types/models";
@@ -23,12 +24,17 @@ function verdictTone(verdict: FaceVerifyResult["verdict"]): "success" | "warning
   return "danger";
 }
 
+// 촬영 전 눈 깜빡임 확인 상태
+type BlinkGate = "waiting" | "passed" | "unavailable";
+
 export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const blinkWatcherRef = useRef<BlinkWatcher | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
+  const [blinkGate, setBlinkGate] = useState<BlinkGate>("waiting");
   const [previewUrl, setPreviewUrl] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [result, setResult] = useState<FaceVerifyResult | null>(null);
@@ -43,8 +49,22 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
     });
   }, [cameraOn]);
 
+  // 카메라 준비 완료 후 눈 깜빡임 감시 시작 (정적 사진·화면 위조 차단)
+  useEffect(() => {
+    if (!cameraOn || !videoReady || blinkGate !== "waiting" || !videoRef.current) return;
+
+    const watcher = watchForBlink(
+      videoRef.current,
+      () => setBlinkGate("passed"),
+      () => setBlinkGate("unavailable"), // 감지 모델 로드 실패 → 게이트 없이 진행(fail-open)
+    );
+    blinkWatcherRef.current = watcher;
+    return () => watcher.stop();
+  }, [cameraOn, videoReady, blinkGate]);
+
   useEffect(() => {
     return () => {
+      blinkWatcherRef.current?.stop();
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     };
@@ -60,20 +80,26 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
     setResult(null);
     setErrorMessage("");
     setVideoReady(false);
+    setBlinkGate("waiting"); // 재촬영 시 깜빡임 확인도 다시 요구
 
     if (!streamRef.current) {
       try {
+        // 고해상도 요구: 저해상도 캡처는 화면·인쇄물의 위조 단서(모아레 등)를 지워
+        // 백엔드 안티스푸핑 판별력을 떨어뜨린다.
         streamRef.current = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
+          video: { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: false,
         });
       } catch (firstError) {
         // 직전 QR 스캔이 카메라를 아직 쥐고 있거나 전면 카메라가 없는 기기 대응:
-        // 잠시 대기 후 제약 없이 1회 재시도한다.
+        // 잠시 대기 후 제약을 낮춰 1회 재시도한다.
         try {
           stopStream();
           await new Promise((resolve) => setTimeout(resolve, 500));
-          streamRef.current = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          streamRef.current = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false,
+          });
         } catch {
           const name = firstError instanceof DOMException ? firstError.name : "";
           setErrorMessage(
@@ -112,6 +138,8 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
       return;
     }
 
+    blinkWatcherRef.current?.stop();
+
     // 로컬 캡처 보관은 부가 기능 — Safari 프라이빗 모드 등에서 IndexedDB 가
     // 실패해도 인증(verify)은 계속 진행한다.
     try {
@@ -143,6 +171,13 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
     }
   };
 
+  const blinkPassed = blinkGate !== "waiting"; // passed 또는 unavailable(fail-open)
+  const captureLabel = !videoReady
+    ? "카메라 준비 중…"
+    : blinkPassed
+      ? "촬영하기"
+      : "눈 깜빡임 확인 중…";
+
   const similarityPercent =
     result?.similarity !== undefined ? Math.round(result.similarity * 100) : null;
 
@@ -153,8 +188,8 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
           {previewUrl ? "재촬영하기" : "얼굴촬영"}
         </Button>
         {cameraOn ? (
-          <Button onClick={capture} variant="secondary" disabled={verifying || !videoReady}>
-            {videoReady ? "촬영하기" : "카메라 준비 중…"}
+          <Button onClick={capture} variant="secondary" disabled={verifying || !videoReady || !blinkPassed}>
+            {captureLabel}
           </Button>
         ) : null}
       </div>
@@ -170,6 +205,23 @@ export function FaceCaptureVerifier({ ticket }: { ticket: Ticket }) {
             onCanPlay={() => setVideoReady(true)}
           />
         </div>
+      ) : null}
+      {cameraOn && videoReady && blinkGate === "waiting" ? (
+        <StatusCard
+          title="실물 확인 — 눈을 깜빡여 주세요"
+          description="입장자가 카메라를 정면으로 보고 눈을 한 번 깜빡이면 촬영이 활성화됩니다. (사진·화면은 통과할 수 없습니다)"
+          tone="warning"
+        />
+      ) : null}
+      {cameraOn && blinkGate === "passed" ? (
+        <StatusCard title="실물 확인 완료" description="눈 깜빡임이 감지되었습니다. 촬영을 진행해 주세요." tone="success" />
+      ) : null}
+      {cameraOn && blinkGate === "unavailable" ? (
+        <StatusCard
+          title="깜빡임 감지 사용 불가"
+          description="감지 모듈을 불러오지 못해 깜빡임 확인 없이 진행합니다. (백엔드 위조 판별은 계속 동작)"
+          tone="info"
+        />
       ) : null}
       <canvas ref={canvasRef} style={{ display: "none" }} />
       {previewUrl ? <img src={previewUrl} alt="capture preview" className="preview-image preview-image--compact" /> : null}
