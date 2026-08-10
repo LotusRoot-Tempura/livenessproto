@@ -1,23 +1,22 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "@/styles/globals.css";
-import { MobileTabBar } from "@/components/MobileTabBar";
-import { PwaRegistrar } from "@/components/PwaRegistrar";
-import { TopbarStatus } from "@/components/TopbarStatus";
 
 export const metadata: Metadata = {
-  title: "Grab Ticket Face MVP",
-  description: "QR + 얼굴 등록 + 얼굴 인증 기반 티켓 입장 MVP",
-  manifest: "/manifest.webmanifest",
-  applicationName: "Grab Ticket Face MVP",
+  title: "Active Liveness Prototype",
+  description: "MediaPipe 기반 active liveness UI/UX 프로토타입",
+  applicationName: "Active Liveness Prototype",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Grab Ticket",
+    title: "Liveness",
   },
   formatDetection: {
     telephone: false,
   },
-  themeColor: "#165dff",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#111827",
 };
 
 export default function RootLayout({
@@ -28,14 +27,7 @@ export default function RootLayout({
   return (
     <html lang="ko">
       <body>
-        <PwaRegistrar />
-        <div className="app-shell">
-          <header className="topbar">
-            <TopbarStatus />
-          </header>
-          <main className="page-shell">{children}</main>
-          <MobileTabBar />
-        </div>
+        <main className="liveness-app">{children}</main>
       </body>
     </html>
   );

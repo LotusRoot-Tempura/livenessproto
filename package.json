@@ -1,27 +1,19 @@
 {
-  "name": "grab-ticket-face-mvp",
-  "version": "0.1.123",
+  "name": "active-liveness-prototype",
+  "version": "0.1.128",
   "private": true,
   "scripts": {
-    "predev": "node scripts/bump-build-version.mjs",
-    "dev": "next dev",
-    "prebuild": "node scripts/bump-build-version.mjs",
-    "build": "next build",
-    "prestart": "node scripts/bump-build-version.mjs",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
     "start": "next start",
-    "pretypecheck": "node scripts/bump-build-version.mjs",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.18",
-    "html5-qrcode": "^2.3.8",
-    "idb": "^8.0.0",
-    "next": "^15.3.2",
+    "next": "^16.3.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-qr-code": "^2.0.15",
-    "uuid": "^11.1.0"
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",

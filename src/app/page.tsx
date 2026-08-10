@@ -1,11 +1,5 @@
-import { PageSection } from "@/components/PageSection";
-import { RoleMenuGrid } from "@/components/RoleMenuGrid";
-import { ROLE_ITEMS } from "@/lib/constants";
+import { ActiveLivenessPrototype } from "@/components/ActiveLivenessPrototype";
 
 export default function HomePage() {
-  return (
-    <PageSection>
-      <RoleMenuGrid items={ROLE_ITEMS} simple />
-    </PageSection>
-  );
+  return <ActiveLivenessPrototype />;
 }

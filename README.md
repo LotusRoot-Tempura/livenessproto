@@ -1,73 +1,32 @@
-# Grab Ticket Face MVP
+# Active Liveness Prototype
 
-암표 방지를 위한 `QR + 얼굴 등록 + 얼굴 인증 기반 티켓 입장 MVP` 웹앱입니다.
+MediaPipe FaceLandmarker 기반 active liveness UI/UX 프로토타입입니다.
 
-## 실행 방법
+## 기능
+
+- 카메라 권한 요청
+- 얼굴 프레이밍 품질 점수화
+- 단일 얼굴 감지
+- 중앙 정렬, 거리, 조명, 얼굴 가림 상태 표시
+- 오른쪽/왼쪽 고개 회전 챌린지
+- 눈 깜빡임 챌린지
+- PASS 결과 표시
+
+## 실행
 
 ```bash
 npm install
 npm run dev
 ```
 
-브라우저에서 `http://localhost:3000` 접속 후 사용합니다.
+로컬에서는 `http://localhost:3000` 또는 Next가 안내하는 포트로 접속합니다.
 
-## 기술 스택
+## 배포
 
-- Next.js App Router
-- TypeScript
-- CSS
-- localStorage + IndexedDB
-- `react-qr-code`
-- `html5-qrcode`
-- `idb`
-- `uuid`
-- `@mediapipe/tasks-vision`
+`main` 브랜치에 push하면 GitHub Actions가 정적 사이트를 빌드해서 GitHub Pages로 배포합니다.
 
-## 폴더 구조
+배포 주소:
 
 ```text
-src/
-  app/
-    face-register/
-    logs/
-    tickets/
-      create/
-    users/
-    verify/
-  components/
-  hooks/
-  lib/
-  store/
-  styles/
-  types/
+https://lotusroot-tempura.github.io/livenessproto/
 ```
-
-## 핵심 흐름
-
-1. 이용자 등록
-2. 얼굴 등록 영상 촬영 및 IndexedDB 저장
-3. 공연 티켓 생성과 QR 발급
-4. 입장자 변경 및 변경 이력 저장
-5. QR 스캔과 mock ZK 검증
-6. 얼굴 촬영과 mock 유사도 판정
-7. 입장 로그 저장
-
-## 저장 구조
-
-- `localStorage`
-  - 이용자
-  - 얼굴 프로필 메타데이터
-  - 티켓
-  - 변경 이력
-  - mock ZK 데이터
-  - 입장 로그
-  - 얼굴 캡처 메타데이터
-- `IndexedDB`
-  - 얼굴 등록 영상 Blob
-  - 현장 얼굴 촬영 이미지 Blob
-
-## 구현 메모
-
-- 실제 얼굴 AI 비교는 하지 않고 mock 점수로 판정합니다.
-- 실제 ZK 검증도 로컬 mock 데이터로 처리합니다.
-- `FaceQualityCheck`는 MediaPipe 로딩 구조를 포함하지만, MVP 특성상 품질 점수는 현장 흐름 중심의 mock 보조 로직으로 동작합니다.
