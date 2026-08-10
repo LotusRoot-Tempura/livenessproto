@@ -57,6 +57,17 @@ type QualityIssue = {
 };
 
 type BlinkPhase = "waitingOpen" | "waitingClosed" | "waitingReopen" | "confirmed";
+type PixelFrame = {
+  data: Uint8ClampedArray;
+  width: number;
+  height: number;
+};
+type RegionSignal = {
+  brightness: number;
+  contrast: number;
+  edge: number;
+  saturation: number;
+};
 
 const FACE_OVAL = [
   10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176,
@@ -72,6 +83,13 @@ const RIGHT_EYE_TOP = 386;
 const RIGHT_EYE_BOTTOM = 374;
 const NOSE_TIP = 1;
 const TFLITE_INFO_LOG = "INFO: Created TensorFlow Lite XNNPACK delegate for CPU.";
+const LEFT_EYE_DENSE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
+const RIGHT_EYE_DENSE = [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466];
+const NOSE_DENSE = [1, 2, 4, 5, 6, 19, 45, 48, 64, 94, 97, 98, 115, 168, 195, 197, 220, 275, 278, 294, 326, 327, 344];
+const MOUTH_DENSE = [
+  0, 13, 14, 17, 37, 39, 40, 61, 78, 80, 81, 82, 84, 87, 88, 91, 95, 146, 178, 181, 185, 191, 267, 269,
+  270, 291, 308, 310, 311, 312, 314, 317, 318, 321, 324, 375, 402, 405, 409, 415,
+];
 
 const USER_YAW_TARGET = 0.13;
 const FRONT_YAW_LIMIT = 0.04;
@@ -85,6 +103,8 @@ const CHALLENGE_HOLD_MS = 1500;
 const SCORE_PASS_THRESHOLD = 82;
 const ISSUE_VISIBLE_DELAY_MS = 1500;
 const STEP_TRANSITION_MS = 1300;
+const OCCLUSION_SAMPLE_WIDTH = 128;
+const OCCLUSION_SAMPLE_HEIGHT = 96;
 
 const initialMetrics: LivenessMetrics = {
   detected: false,
@@ -177,6 +197,120 @@ function eyeAspectRatio(outer: LandmarkPoint, inner: LandmarkPoint, top: Landmar
   const eyeWidth = distance(outer, inner);
   if (eyeWidth <= 0.0001) return 0;
   return distance(top, bottom) / eyeWidth;
+}
+
+function getLandmarkGroup(landmarks: LandmarkPoint[], indices: number[]) {
+  const points = indices.map((index) => landmarks[index]);
+  if (points.some((point) => !point || !Number.isFinite(point.x) || !Number.isFinite(point.y))) return null;
+  return points as LandmarkPoint[];
+}
+
+function getPolygonArea(points: LandmarkPoint[]) {
+  if (points.length < 3) return 0;
+
+  let area = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    if (!current || !next) continue;
+    area += current.x * next.y - next.x * current.y;
+  }
+
+  return Math.abs(area) / 2;
+}
+
+function getPointBounds(points: LandmarkPoint[]) {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+  };
+}
+
+function getBoundsArea(points: LandmarkPoint[]) {
+  const bounds = getPointBounds(points);
+  return Math.max(0, bounds.maxX - bounds.minX) * Math.max(0, bounds.maxY - bounds.minY);
+}
+
+function getPixelFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement): PixelFrame | null {
+  canvas.width = OCCLUSION_SAMPLE_WIDTH;
+  canvas.height = OCCLUSION_SAMPLE_HEIGHT;
+
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+
+  ctx.drawImage(video, 0, 0, OCCLUSION_SAMPLE_WIDTH, OCCLUSION_SAMPLE_HEIGHT);
+  const imageData = ctx.getImageData(0, 0, OCCLUSION_SAMPLE_WIDTH, OCCLUSION_SAMPLE_HEIGHT);
+  return {
+    data: imageData.data,
+    width: OCCLUSION_SAMPLE_WIDTH,
+    height: OCCLUSION_SAMPLE_HEIGHT,
+  };
+}
+
+function getRegionSignal(frame: PixelFrame | null, points: LandmarkPoint[], paddingX: number, paddingY: number): RegionSignal {
+  if (!frame || !points.length) {
+    return { brightness: 0, contrast: 0, edge: 0, saturation: 0 };
+  }
+
+  const bounds = getPointBounds(points);
+  const minX = Math.max(0, Math.floor((bounds.minX - paddingX) * frame.width));
+  const maxX = Math.min(frame.width - 1, Math.ceil((bounds.maxX + paddingX) * frame.width));
+  const minY = Math.max(0, Math.floor((bounds.minY - paddingY) * frame.height));
+  const maxY = Math.min(frame.height - 1, Math.ceil((bounds.maxY + paddingY) * frame.height));
+  const width = maxX - minX + 1;
+  const height = maxY - minY + 1;
+
+  if (width < 3 || height < 3) {
+    return { brightness: 0, contrast: 0, edge: 0, saturation: 0 };
+  }
+
+  const lumas = new Float32Array(width * height);
+  let total = 0;
+  let saturationTotal = 0;
+  let offset = 0;
+
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      const pixelIndex = (y * frame.width + x) * 4;
+      const r = frame.data[pixelIndex] ?? 0;
+      const g = frame.data[pixelIndex + 1] ?? 0;
+      const b = frame.data[pixelIndex + 2] ?? 0;
+      const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const maxChannel = Math.max(r, g, b);
+      const minChannel = Math.min(r, g, b);
+      lumas[offset] = luminance;
+      total += luminance;
+      saturationTotal += maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
+      offset += 1;
+    }
+  }
+
+  const count = Math.max(1, lumas.length);
+  const brightness = total / count;
+  const variance = lumas.reduce((sum, luminance) => sum + Math.pow(luminance - brightness, 2), 0) / count;
+
+  let edgeTotal = 0;
+  let edgeCount = 0;
+  for (let y = 1; y < height; y += 1) {
+    for (let x = 1; x < width; x += 1) {
+      const index = y * width + x;
+      edgeTotal += Math.abs((lumas[index] ?? 0) - (lumas[index - 1] ?? 0));
+      edgeTotal += Math.abs((lumas[index] ?? 0) - (lumas[index - width] ?? 0));
+      edgeCount += 2;
+    }
+  }
+
+  return {
+    brightness,
+    contrast: Math.sqrt(variance),
+    edge: edgeTotal / Math.max(1, edgeCount),
+    saturation: saturationTotal / count,
+  };
 }
 
 function getLighting(video: HTMLVideoElement, canvas: HTMLCanvasElement) {
@@ -307,6 +441,7 @@ function stepIndexOf(stepId: LivenessStepId) {
 function isFrontPoseReady(metrics: LivenessMetrics) {
   return (
     metrics.score >= SCORE_PASS_THRESHOLD &&
+    metrics.occlusionClear &&
     Math.abs(metrics.yawRatio) <= FRONT_YAW_LIMIT &&
     metrics.pitchRatio >= FRONT_PITCH_MIN &&
     metrics.pitchRatio <= FRONT_PITCH_MAX
@@ -388,7 +523,7 @@ function getQualityIssue(metrics: LivenessMetrics): QualityIssue | null {
   if (!metrics.occlusionClear) {
     return {
       key: "occlusion",
-      message: "눈 주변 특징점이 흐립니다. 반사가 강한 안경이나 선글라스는 잠시 피해주세요.",
+      message: "눈, 코, 입 주변 특징점이 가려져 인식이 어렵습니다. 얼굴 주요 부위가 보이게 해 주세요.",
     };
   }
 
@@ -693,7 +828,7 @@ export function ActiveLivenessPrototype() {
 
       let nextChallenge = challengeRef.current;
       let changed = false;
-      const qualityReady = nextMetrics.score >= SCORE_PASS_THRESHOLD;
+      const qualityReady = nextMetrics.score >= SCORE_PASS_THRESHOLD && nextMetrics.occlusionClear;
       const baselinePitch = baselinePitchRef.current ?? nextMetrics.pitchRatio;
       const pitchDelta = nextMetrics.pitchRatio - baselinePitch;
 
@@ -799,6 +934,15 @@ export function ActiveLivenessPrototype() {
     const noseTip = landmarks[NOSE_TIP];
     const mouthLeft = landmarks[61];
     const mouthRight = landmarks[291];
+    const noseBridge = landmarks[168];
+    const noseLeft = landmarks[98];
+    const noseRight = landmarks[327];
+    const upperLip = landmarks[13];
+    const lowerLip = landmarks[14];
+    const leftEyeDense = getLandmarkGroup(landmarks, LEFT_EYE_DENSE);
+    const rightEyeDense = getLandmarkGroup(landmarks, RIGHT_EYE_DENSE);
+    const noseDense = getLandmarkGroup(landmarks, NOSE_DENSE);
+    const mouthDense = getLandmarkGroup(landmarks, MOUTH_DENSE);
 
     if (
       !bounds ||
@@ -812,7 +956,16 @@ export function ActiveLivenessPrototype() {
       !rightEyeBottom ||
       !noseTip ||
       !mouthLeft ||
-      !mouthRight
+      !mouthRight ||
+      !noseBridge ||
+      !noseLeft ||
+      !noseRight ||
+      !upperLip ||
+      !lowerLip ||
+      !leftEyeDense ||
+      !rightEyeDense ||
+      !noseDense ||
+      !mouthDense
     ) {
       return initialMetrics;
     }
@@ -833,13 +986,66 @@ export function ActiveLivenessPrototype() {
     const lightingCanvas = lightingCanvasRef.current ?? document.createElement("canvas");
     lightingCanvasRef.current = lightingCanvas;
     const lighting = getLighting(video, lightingCanvas);
+    const pixelFrame = getPixelFrame(video, lightingCanvas);
+    const leftEyeSignal = getRegionSignal(pixelFrame, leftEyeDense, 0.035, 0.03);
+    const rightEyeSignal = getRegionSignal(pixelFrame, rightEyeDense, 0.035, 0.03);
+    const noseSignal = getRegionSignal(pixelFrame, noseDense, 0.028, 0.035);
+    const mouthSignal = getRegionSignal(pixelFrame, mouthDense, 0.035, 0.03);
     const centered = Math.abs(bounds.centerX - 0.5) < 0.12 && Math.abs(bounds.centerY - 0.51) < 0.15;
     const properSize = bounds.width > 0.24 && bounds.width < 0.62 && bounds.height > 0.32 && bounds.height < 0.82;
     const singleFace = faceCount === 1;
-    const eyesUnavailable = averageEar < 0.035;
-    const eyeModelUnstable = eyeWidthRatio > 3.4 && averageEar < EYES_OPEN_EAR;
-    const mouthUnavailable = mouthWidthRatio < 0.055;
-    const occlusionClear = !(eyesUnavailable || eyeModelUnstable || mouthUnavailable);
+    const faceArea = Math.max(0.0001, bounds.width * bounds.height);
+    const leftEyeWidthRatio = distance(leftEyeOuter, leftEyeInner) / Math.max(0.0001, bounds.width);
+    const rightEyeWidthRatio = distance(rightEyeOuter, rightEyeInner) / Math.max(0.0001, bounds.width);
+    const leftEyeAreaRatio = getPolygonArea(leftEyeDense) / faceArea;
+    const rightEyeAreaRatio = getPolygonArea(rightEyeDense) / faceArea;
+    const noseWidthRatio = distance(noseLeft, noseRight) / Math.max(0.0001, bounds.width);
+    const noseBridgeRatio = distance(noseBridge, noseTip) / Math.max(0.0001, bounds.height);
+    const mouthDenseBounds = getPointBounds(mouthDense);
+    const mouthDenseWidthRatio = (mouthDenseBounds.maxX - mouthDenseBounds.minX) / Math.max(0.0001, bounds.width);
+    const mouthDenseHeightRatio = (mouthDenseBounds.maxY - mouthDenseBounds.minY) / Math.max(0.0001, bounds.height);
+    const lipGapRatio = distance(upperLip, lowerLip) / Math.max(0.0001, bounds.height);
+    const eyesShapeClear =
+      leftEyeWidthRatio > 0.11 &&
+      rightEyeWidthRatio > 0.11 &&
+      eyeWidthRatio < 2.45 &&
+      averageEar > 0.07 &&
+      leftEyeAreaRatio > 0.00055 &&
+      rightEyeAreaRatio > 0.00055;
+    const noseShapeClear =
+      noseWidthRatio > 0.07 &&
+      noseWidthRatio < 0.36 &&
+      noseBridgeRatio > 0.07 &&
+      noseBridgeRatio < 0.38 &&
+      noseTip.y > eyeCenterY + bounds.height * 0.05 &&
+      noseTip.y < mouthCenterY - bounds.height * 0.035 &&
+      getBoundsArea(noseDense) / faceArea > 0.008;
+    const mouthShapeClear =
+      mouthWidthRatio > 0.13 &&
+      mouthWidthRatio < 0.62 &&
+      mouthDenseWidthRatio > 0.15 &&
+      mouthDenseHeightRatio > 0.025 &&
+      lipGapRatio < 0.18 &&
+      mouthCenterY > noseTip.y + bounds.height * 0.065 &&
+      getBoundsArea(mouthDense) / faceArea > 0.006;
+    const eyesTextureClear =
+      leftEyeSignal.brightness > 24 &&
+      rightEyeSignal.brightness > 24 &&
+      leftEyeSignal.brightness < 236 &&
+      rightEyeSignal.brightness < 236 &&
+      (leftEyeSignal.contrast + rightEyeSignal.contrast) / 2 >= 7.2 &&
+      (leftEyeSignal.edge + rightEyeSignal.edge) / 2 >= 2.6;
+    const noseTextureClear =
+      noseSignal.brightness > 24 &&
+      noseSignal.brightness < 236 &&
+      (noseSignal.contrast >= 4.2 || noseSignal.edge >= 1.8);
+    const mouthTextureClear =
+      mouthSignal.brightness > 24 &&
+      mouthSignal.brightness < 236 &&
+      mouthSignal.contrast >= 5.0 &&
+      mouthSignal.edge >= 2.0;
+    const occlusionClear =
+      eyesShapeClear && noseShapeClear && mouthShapeClear && eyesTextureClear && noseTextureClear && mouthTextureClear;
 
     const scoreParts = [
       1,
@@ -849,6 +1055,8 @@ export function ActiveLivenessPrototype() {
       (scoreRange(lighting.brightness, 62, 208, 42) + scoreRange(lighting.contrast, 18, 96, 18)) / 2,
       occlusionClear ? 1 : 0,
     ];
+
+    const baseScore = Math.round((scoreParts.reduce((sum, value) => sum + value, 0) / scoreParts.length) * 100);
 
     return {
       detected: true,
@@ -864,7 +1072,7 @@ export function ActiveLivenessPrototype() {
       brightness: lighting.brightness,
       contrast: lighting.contrast,
       averageEar,
-      score: Math.round((scoreParts.reduce((sum, value) => sum + value, 0) / scoreParts.length) * 100),
+      score: occlusionClear ? baseScore : Math.min(baseScore, 68),
     };
   }
 
@@ -892,13 +1100,13 @@ export function ActiveLivenessPrototype() {
       : activeStep === "frontBlink"
         ? isFrontPoseReady(metrics) && blinkPhaseRef.current === "confirmed"
         : activeStep === "right"
-          ? metrics.score >= SCORE_PASS_THRESHOLD && metrics.yawRatio >= USER_YAW_TARGET
+          ? metrics.score >= SCORE_PASS_THRESHOLD && metrics.occlusionClear && metrics.yawRatio >= USER_YAW_TARGET
           : activeStep === "left"
-            ? metrics.score >= SCORE_PASS_THRESHOLD && metrics.yawRatio <= -USER_YAW_TARGET
+            ? metrics.score >= SCORE_PASS_THRESHOLD && metrics.occlusionClear && metrics.yawRatio <= -USER_YAW_TARGET
             : activeStep === "down"
-              ? metrics.score >= SCORE_PASS_THRESHOLD && pitchDelta >= PITCH_DELTA_TARGET
+              ? metrics.score >= SCORE_PASS_THRESHOLD && metrics.occlusionClear && pitchDelta >= PITCH_DELTA_TARGET
               : activeStep === "up"
-                ? metrics.score >= SCORE_PASS_THRESHOLD && pitchDelta <= -PITCH_DELTA_TARGET
+                ? metrics.score >= SCORE_PASS_THRESHOLD && metrics.occlusionClear && pitchDelta <= -PITCH_DELTA_TARGET
                 : false;
   const progressPercent = Math.round((passReady || isTransitioning ? 1 : holdProgress) * 100);
   const ringState = statusMessage ? "warn" : passReady || isTransitioning ? "pass" : currentStepReady ? "ready" : "idle";
