@@ -1384,6 +1384,7 @@ textarea {
 
 .liveness-camera video {
   object-fit: cover;
+  transform: scaleX(-1);
 }
 
 .liveness-overlay {

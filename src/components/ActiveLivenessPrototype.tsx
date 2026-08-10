@@ -21,7 +21,8 @@ type Bounds = {
   centerY: number;
 };
 
-type LivenessStepId = "frame" | "right" | "left" | "blink" | "complete";
+type LivenessStepId = "frontBlink" | "right" | "left" | "down" | "up" | "complete";
+type ChallengeStepId = Exclude<LivenessStepId, "complete">;
 type CameraState = "idle" | "requesting" | "running" | "failed";
 type ModelState = "idle" | "loading" | "ready" | "failed";
 
@@ -33,6 +34,7 @@ type LivenessMetrics = {
   lightingGood: boolean;
   occlusionClear: boolean;
   yawRatio: number;
+  pitchRatio: number;
   faceWidth: number;
   faceHeight: number;
   brightness: number;
@@ -42,10 +44,11 @@ type LivenessMetrics = {
 };
 
 type ChallengeState = {
-  frame: boolean;
+  frontBlink: boolean;
   right: boolean;
   left: boolean;
-  blink: boolean;
+  down: boolean;
+  up: boolean;
 };
 
 const FACE_OVAL = [
@@ -63,12 +66,12 @@ const RIGHT_EYE_BOTTOM = 374;
 const NOSE_TIP = 1;
 const TFLITE_INFO_LOG = "INFO: Created TensorFlow Lite XNNPACK delegate for CPU.";
 
-const YAW_RIGHT_THRESHOLD = 0.055;
-const YAW_LEFT_THRESHOLD = -0.055;
+const USER_YAW_TARGET = 0.105;
+const PITCH_DELTA_TARGET = 0.055;
 const EYES_OPEN_EAR = 0.21;
 const EYES_CLOSED_EAR = 0.195;
-const FRAME_HOLD_MS = 750;
-const TURN_HOLD_MS = 380;
+const FRONT_HOLD_MS = 1500;
+const CHALLENGE_HOLD_MS = 750;
 const SCORE_PASS_THRESHOLD = 82;
 
 const initialMetrics: LivenessMetrics = {
@@ -79,6 +82,7 @@ const initialMetrics: LivenessMetrics = {
   lightingGood: false,
   occlusionClear: false,
   yawRatio: 0,
+  pitchRatio: 0,
   faceWidth: 0,
   faceHeight: 0,
   brightness: 0,
@@ -88,10 +92,11 @@ const initialMetrics: LivenessMetrics = {
 };
 
 const steps: { id: LivenessStepId; label: string; shortLabel: string }[] = [
-  { id: "frame", label: "정면 프레이밍", shortLabel: "정면" },
-  { id: "right", label: "오른쪽 회전", shortLabel: "오른쪽" },
-  { id: "left", label: "왼쪽 회전", shortLabel: "왼쪽" },
-  { id: "blink", label: "눈 깜빡임", shortLabel: "깜빡임" },
+  { id: "frontBlink", label: "정면 + 눈깜빡임", shortLabel: "정면" },
+  { id: "right", label: "오른쪽 50~60도", shortLabel: "오른쪽" },
+  { id: "left", label: "왼쪽 50~60도", shortLabel: "왼쪽" },
+  { id: "down", label: "고개 숙이기", shortLabel: "숙이기" },
+  { id: "up", label: "고개 들기", shortLabel: "들기" },
   { id: "complete", label: "판정 완료", shortLabel: "완료" },
 ];
 
@@ -220,8 +225,10 @@ function mapPoint(point: LandmarkPoint, video: HTMLVideoElement, canvas: HTMLCan
     offsetY = (height - renderedHeight) / 2;
   }
 
+  const rawX = offsetX + point.x * renderedWidth;
+
   return {
-    x: offsetX + point.x * renderedWidth,
+    x: width - rawX,
     y: offsetY + point.y * renderedHeight,
   };
 }
@@ -296,15 +303,18 @@ function drawOverlay(
     ctx.fill();
   }
 
-  if (activeStep === "right" || activeStep === "left") {
-    const arrowStart = activeStep === "right" ? cx - 70 : cx + 70;
-    const arrowEnd = activeStep === "right" ? cx + 70 : cx - 70;
+  if (activeStep === "right" || activeStep === "left" || activeStep === "down" || activeStep === "up") {
+    const isHorizontal = activeStep === "right" || activeStep === "left";
+    const arrowStartX = activeStep === "right" ? cx - 70 : activeStep === "left" ? cx + 70 : cx;
+    const arrowEndX = activeStep === "right" ? cx + 70 : activeStep === "left" ? cx - 70 : cx;
+    const arrowStartY = isHorizontal ? canvas.clientHeight * 0.18 : activeStep === "down" ? canvas.clientHeight * 0.12 : canvas.clientHeight * 0.25;
+    const arrowEndY = isHorizontal ? canvas.clientHeight * 0.18 : activeStep === "down" ? canvas.clientHeight * 0.25 : canvas.clientHeight * 0.12;
     ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
     ctx.lineWidth = 5;
     ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.moveTo(arrowStart, canvas.clientHeight * 0.18);
-    ctx.lineTo(arrowEnd, canvas.clientHeight * 0.18);
+    ctx.moveTo(arrowStartX, arrowStartY);
+    ctx.lineTo(arrowEndX, arrowEndY);
     ctx.stroke();
     ctx.lineCap = "butt";
   }
@@ -319,6 +329,56 @@ function stepIndexOf(stepId: LivenessStepId) {
   return steps.findIndex((step) => step.id === stepId);
 }
 
+function getQualityBlockMessage(metrics: LivenessMetrics) {
+  if (!metrics.detected) {
+    if (metrics.brightness > 0 && metrics.brightness < 45) {
+      return "어두운 환경에서는 얼굴 인식이 어렵습니다. 조명을 켜고 얼굴을 밝게 비춰 주세요.";
+    }
+    if (metrics.brightness > 228) {
+      return "빛이 너무 강하거나 역광입니다. 얼굴이 하얗게 날아가지 않도록 방향을 조정해 주세요.";
+    }
+    if (metrics.contrast > 0 && metrics.contrast < 10) {
+      return "얼굴과 배경 구분이 약합니다. 조명 방향을 바꾸거나 더 밝은 곳에서 시도해 주세요.";
+    }
+    return "얼굴이 화면에 보이지 않습니다. 얼굴 전체가 안내선 안에 들어오게 맞춰 주세요.";
+  }
+
+  if (!metrics.singleFace) {
+    return "두 명 이상이 화면에 잡혔습니다. 인증 대상 한 명만 화면에 나오게 해 주세요.";
+  }
+
+  if (!metrics.properSize) {
+    if (metrics.faceWidth < 0.24 || metrics.faceHeight < 0.32) {
+      return "얼굴이 너무 작게 보입니다. 카메라에 조금 더 가까이 다가와 주세요.";
+    }
+    return "얼굴이 너무 크게 보입니다. 카메라에서 조금 더 떨어져 주세요.";
+  }
+
+  if (!metrics.centered) {
+    return "얼굴이 프레임 중앙에서 벗어났습니다. 화면 중앙에 얼굴을 맞춰 주세요.";
+  }
+
+  if (!metrics.lightingGood) {
+    if (metrics.brightness < 55) {
+      return "조명이 어두워 얼굴 특징점을 읽기 어렵습니다. 불을 켜거나 밝은 곳으로 이동해 주세요.";
+    }
+    if (metrics.brightness > 218) {
+      return "조명이 너무 강합니다. 역광이나 직사광선을 피해서 얼굴 윤곽이 보이게 해 주세요.";
+    }
+    return "조명 대비가 낮아 얼굴 윤곽이 흐립니다. 얼굴 쪽 조명을 고르게 맞춰 주세요.";
+  }
+
+  if (!metrics.occlusionClear) {
+    return "눈, 코, 입 주변이 가려져 인식이 어렵습니다. 일반 안경은 허용하지만 눈 반사나 선글라스는 피해주세요.";
+  }
+
+  if (metrics.score < SCORE_PASS_THRESHOLD) {
+    return `품질 점수 ${SCORE_PASS_THRESHOLD}점 이상이 필요합니다. 얼굴 위치와 조명을 조금 더 맞춰 주세요.`;
+  }
+
+  return "";
+}
+
 export function ActiveLivenessPrototype() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
@@ -326,30 +386,37 @@ export function ActiveLivenessPrototype() {
   const streamRef = useRef<MediaStream | null>(null);
   const landmarkerRef = useRef<FaceLandmarker | null>(null);
   const rafRef = useRef<number | null>(null);
-  const activeStepRef = useRef<LivenessStepId>("frame");
+  const activeStepRef = useRef<LivenessStepId>("frontBlink");
   const challengeRef = useRef<ChallengeState>({
-    frame: false,
+    frontBlink: false,
     right: false,
     left: false,
-    blink: false,
+    down: false,
+    up: false,
   });
-  const holdStartRef = useRef<Record<"frame" | "right" | "left", number | null>>({
-    frame: null,
+  const holdStartRef = useRef<Record<ChallengeStepId, number | null>>({
+    frontBlink: null,
     right: null,
     left: null,
+    down: null,
+    up: null,
   });
   const eyesWereOpenRef = useRef(false);
+  const blinkSeenRef = useRef(false);
+  const baselinePitchRef = useRef<number | null>(null);
+  const downPitchSignRef = useRef<1 | -1 | null>(null);
   const startedAtRef = useRef<number | null>(null);
 
   const [cameraState, setCameraState] = useState<CameraState>("idle");
   const [modelState, setModelState] = useState<ModelState>("idle");
-  const [activeStep, setActiveStep] = useState<LivenessStepId>("frame");
+  const [activeStep, setActiveStep] = useState<LivenessStepId>("frontBlink");
   const [metrics, setMetrics] = useState<LivenessMetrics>(initialMetrics);
   const [challenge, setChallenge] = useState<ChallengeState>({
-    frame: false,
+    frontBlink: false,
     right: false,
     left: false,
-    blink: false,
+    down: false,
+    up: false,
   });
   const [elapsedMs, setElapsedMs] = useState(0);
   const [errorMessage, setErrorMessage] = useState("");
@@ -381,14 +448,27 @@ export function ActiveLivenessPrototype() {
     setCameraState("idle");
   };
 
+  const resetHolds = () => {
+    holdStartRef.current = {
+      frontBlink: null,
+      right: null,
+      left: null,
+      down: null,
+      up: null,
+    };
+  };
+
   const resetSession = () => {
-    holdStartRef.current = { frame: null, right: null, left: null };
+    resetHolds();
     eyesWereOpenRef.current = false;
+    blinkSeenRef.current = false;
+    baselinePitchRef.current = null;
+    downPitchSignRef.current = null;
     startedAtRef.current = performance.now();
-    moveToStep("frame");
+    moveToStep("frontBlink");
     setElapsedMs(0);
     setMetrics(initialMetrics);
-    setChallengeState({ frame: false, right: false, left: false, blink: false });
+    setChallengeState({ frontBlink: false, right: false, left: false, down: false, up: false });
     setErrorMessage("");
   };
 
@@ -459,6 +539,19 @@ export function ActiveLivenessPrototype() {
     }
   };
 
+  const buildNoFaceMetrics = (video: HTMLVideoElement): LivenessMetrics => {
+    const lightingCanvas = lightingCanvasRef.current ?? document.createElement("canvas");
+    lightingCanvasRef.current = lightingCanvas;
+    const lighting = getLighting(video, lightingCanvas);
+
+    return {
+      ...initialMetrics,
+      brightness: lighting.brightness,
+      contrast: lighting.contrast,
+      lightingGood: lighting.good,
+    };
+  };
+
   const runDetection = (landmarker: FaceLandmarker) => {
     stopLoop();
 
@@ -480,10 +573,17 @@ export function ActiveLivenessPrototype() {
       }
 
       if (!landmarks) {
-        holdStartRef.current = { frame: null, right: null, left: null };
-        eyesWereOpenRef.current = false;
-        setMetrics(initialMetrics);
-        drawOverlay(canvas, video, null, initialMetrics, activeStepRef.current);
+        const currentStep = activeStepRef.current;
+        if (currentStep !== "complete") {
+          holdStartRef.current[currentStep] = null;
+        }
+        if (currentStep === "frontBlink") {
+          eyesWereOpenRef.current = false;
+          blinkSeenRef.current = false;
+        }
+        const noFaceMetrics = buildNoFaceMetrics(video);
+        setMetrics(noFaceMetrics);
+        drawOverlay(canvas, video, null, noFaceMetrics, currentStep);
         rafRef.current = requestAnimationFrame(tick);
         return;
       }
@@ -496,6 +596,9 @@ export function ActiveLivenessPrototype() {
       const now = performance.now();
       let nextChallenge = challengeRef.current;
       let changed = false;
+      const qualityReady = nextMetrics.score >= SCORE_PASS_THRESHOLD;
+      const baselinePitch = baselinePitchRef.current ?? nextMetrics.pitchRatio;
+      const pitchDelta = nextMetrics.pitchRatio - baselinePitch;
 
       const markPassed = (key: keyof ChallengeState) => {
         if (nextChallenge[key]) return;
@@ -503,19 +606,32 @@ export function ActiveLivenessPrototype() {
         changed = true;
       };
 
-      if (currentStep === "frame" && nextMetrics.score >= SCORE_PASS_THRESHOLD) {
-        holdStartRef.current.frame ??= now;
-        if (now - holdStartRef.current.frame >= FRAME_HOLD_MS) {
-          markPassed("frame");
+      if (currentStep === "frontBlink") {
+        if (nextMetrics.averageEar > EYES_OPEN_EAR) {
+          eyesWereOpenRef.current = true;
+        }
+        if (eyesWereOpenRef.current && nextMetrics.averageEar < EYES_CLOSED_EAR) {
+          blinkSeenRef.current = true;
+        }
+
+        if (qualityReady) {
+          holdStartRef.current.frontBlink ??= now;
+        } else {
+          holdStartRef.current.frontBlink = null;
+        }
+
+        const frontHeld =
+          holdStartRef.current.frontBlink !== null && now - holdStartRef.current.frontBlink >= FRONT_HOLD_MS;
+        if (frontHeld && blinkSeenRef.current) {
+          baselinePitchRef.current = nextMetrics.pitchRatio;
+          markPassed("frontBlink");
           moveToStep("right");
         }
-      } else if (currentStep === "frame") {
-        holdStartRef.current.frame = null;
       }
 
-      if (currentStep === "right" && nextMetrics.yawRatio >= YAW_RIGHT_THRESHOLD) {
+      if (currentStep === "right" && qualityReady && nextMetrics.yawRatio >= USER_YAW_TARGET) {
         holdStartRef.current.right ??= now;
-        if (now - holdStartRef.current.right >= TURN_HOLD_MS) {
+        if (now - holdStartRef.current.right >= CHALLENGE_HOLD_MS) {
           markPassed("right");
           moveToStep("left");
         }
@@ -523,24 +639,36 @@ export function ActiveLivenessPrototype() {
         holdStartRef.current.right = null;
       }
 
-      if (currentStep === "left" && nextMetrics.yawRatio <= YAW_LEFT_THRESHOLD) {
+      if (currentStep === "left" && qualityReady && nextMetrics.yawRatio <= -USER_YAW_TARGET) {
         holdStartRef.current.left ??= now;
-        if (now - holdStartRef.current.left >= TURN_HOLD_MS) {
+        if (now - holdStartRef.current.left >= CHALLENGE_HOLD_MS) {
           markPassed("left");
-          moveToStep("blink");
+          moveToStep("down");
         }
       } else if (currentStep === "left") {
         holdStartRef.current.left = null;
       }
 
-      if (currentStep === "blink") {
-        if (nextMetrics.averageEar > EYES_OPEN_EAR) {
-          eyesWereOpenRef.current = true;
+      if (currentStep === "down" && qualityReady && Math.abs(pitchDelta) >= PITCH_DELTA_TARGET) {
+        holdStartRef.current.down ??= now;
+        if (now - holdStartRef.current.down >= CHALLENGE_HOLD_MS) {
+          downPitchSignRef.current = pitchDelta >= 0 ? 1 : -1;
+          markPassed("down");
+          moveToStep("up");
         }
-        if (eyesWereOpenRef.current && nextMetrics.averageEar < EYES_CLOSED_EAR) {
-          markPassed("blink");
+      } else if (currentStep === "down") {
+        holdStartRef.current.down = null;
+      }
+
+      const downPitchSign = downPitchSignRef.current ?? 1;
+      if (currentStep === "up" && qualityReady && downPitchSign * pitchDelta <= -PITCH_DELTA_TARGET) {
+        holdStartRef.current.up ??= now;
+        if (now - holdStartRef.current.up >= CHALLENGE_HOLD_MS) {
+          markPassed("up");
           moveToStep("complete");
         }
+      } else if (currentStep === "up") {
+        holdStartRef.current.up = null;
       }
 
       if (changed) {
@@ -589,7 +717,13 @@ export function ActiveLivenessPrototype() {
     }
 
     const eyeCenterX = (leftEyeOuter.x + rightEyeOuter.x) / 2;
-    const yawRatio = (noseTip.x - eyeCenterX) / Math.max(0.0001, bounds.width);
+    const leftEyeY = (leftEyeOuter.y + leftEyeInner.y) / 2;
+    const rightEyeY = (rightEyeOuter.y + rightEyeInner.y) / 2;
+    const eyeCenterY = (leftEyeY + rightEyeY) / 2;
+    const mouthCenterY = (mouthLeft.y + mouthRight.y) / 2;
+    const rawYawRatio = (noseTip.x - eyeCenterX) / Math.max(0.0001, bounds.width);
+    const yawRatio = -rawYawRatio;
+    const pitchRatio = (noseTip.y - eyeCenterY) / Math.max(0.0001, mouthCenterY - eyeCenterY);
     const leftEar = eyeAspectRatio(leftEyeOuter, leftEyeInner, leftEyeTop, leftEyeBottom);
     const rightEar = eyeAspectRatio(rightEyeOuter, rightEyeInner, rightEyeTop, rightEyeBottom);
     const averageEar = (leftEar + rightEar) / 2;
@@ -621,6 +755,7 @@ export function ActiveLivenessPrototype() {
       lightingGood: lighting.good,
       occlusionClear,
       yawRatio,
+      pitchRatio,
       faceWidth: bounds.width,
       faceHeight: bounds.height,
       brightness: lighting.brightness,
@@ -632,19 +767,24 @@ export function ActiveLivenessPrototype() {
 
   const activeStepInfo = steps.find((step) => step.id === activeStep) ?? steps[0];
   const currentStepIndex = stepIndexOf(activeStep);
-  const completedCount = Number(challenge.frame) + Number(challenge.right) + Number(challenge.left) + Number(challenge.blink);
+  const completedCount =
+    Number(challenge.frontBlink) + Number(challenge.right) + Number(challenge.left) + Number(challenge.down) + Number(challenge.up);
   const passReady = activeStep === "complete";
+  const pitchDelta = baselinePitchRef.current === null ? 0 : metrics.pitchRatio - baselinePitchRef.current;
+  const yawApproxDegrees = Math.round(Math.abs(metrics.yawRatio) * 500);
+  const pitchApprox = Math.round(pitchDelta * 1000);
 
   const primaryInstruction = useMemo(() => {
     if (cameraState !== "running") return "카메라를 시작하세요.";
-    if (!metrics.detected) return "얼굴을 프레임 안에 맞추세요.";
-    if (!metrics.singleFace) return "한 명만 화면에 남겨 주세요.";
-    if (activeStep === "frame") return "정면을 유지하세요.";
-    if (activeStep === "right") return "고개를 오른쪽으로 돌리세요.";
-    if (activeStep === "left") return "고개를 왼쪽으로 돌리세요.";
-    if (activeStep === "blink") return "눈을 한 번 깜빡이세요.";
+    const qualityBlockMessage = getQualityBlockMessage(metrics);
+    if (qualityBlockMessage) return qualityBlockMessage;
+    if (activeStep === "frontBlink") return "정면을 1.5초 유지하고 눈을 한 번 깜빡이세요.";
+    if (activeStep === "right") return "고개를 오른쪽으로 크게 돌리고 0.75초 유지하세요.";
+    if (activeStep === "left") return "고개를 왼쪽으로 크게 돌리고 0.75초 유지하세요.";
+    if (activeStep === "down") return "턱을 아래로 당겨 고개를 숙이고 0.75초 유지하세요.";
+    if (activeStep === "up") return "턱을 들어 얼굴을 위로 향하고 0.75초 유지하세요.";
     return "라이브니스 통과";
-  }, [activeStep, cameraState, metrics.detected, metrics.singleFace]);
+  }, [activeStep, cameraState, metrics]);
 
   const qualityChecks = [
     ["얼굴", metrics.detected, metrics.detected ? 1 : 0],
@@ -702,13 +842,15 @@ export function ActiveLivenessPrototype() {
             const done =
               step.id === "complete"
                 ? passReady
-                : step.id === "frame"
-                  ? challenge.frame
+                : step.id === "frontBlink"
+                  ? challenge.frontBlink
                   : step.id === "right"
                     ? challenge.right
                     : step.id === "left"
                       ? challenge.left
-                      : challenge.blink;
+                      : step.id === "down"
+                        ? challenge.down
+                        : challenge.up;
             const active = index === currentStepIndex;
             return (
               <div key={step.id} className="liveness-step" data-active={active ? "true" : "false"} data-done={done ? "true" : "false"}>
@@ -739,28 +881,28 @@ export function ActiveLivenessPrototype() {
         <div className="liveness-readout">
           <div>
             <span>yaw</span>
-            <strong>{formatNumber(metrics.yawRatio, 3)}</strong>
+            <strong>{yawApproxDegrees}°</strong>
+          </div>
+          <div>
+            <span>pitch</span>
+            <strong>{pitchApprox}</strong>
           </div>
           <div>
             <span>EAR</span>
             <strong>{formatNumber(metrics.averageEar, 3)}</strong>
           </div>
           <div>
-            <span>lux</span>
+            <span>light</span>
             <strong>{Math.round(metrics.brightness)}</strong>
-          </div>
-          <div>
-            <span>time</span>
-            <strong>{formatNumber(elapsedMs / 1000, 1)}s</strong>
           </div>
         </div>
 
         <div className="liveness-result" data-pass={passReady ? "true" : "false"}>
-          <strong>{passReady ? "검증 완료" : `${completedCount}/4 단계 완료`}</strong>
+          <strong>{passReady ? "검증 완료" : `${completedCount}/5 단계 완료`}</strong>
           <span>
             {passReady
-              ? "프레이밍, 좌우 회전, 깜빡임 챌린지가 모두 통과되었습니다."
-              : "정면 품질이 안정되면 다음 동작으로 자동 진행됩니다."}
+              ? "정면, 눈깜빡임, 좌우 회전, 고개 숙임/들림 챌린지가 모두 통과되었습니다."
+              : "각 단계에서 품질 점수 82점 이상을 유지해야 다음 동작으로 넘어갑니다."}
           </span>
         </div>
       </aside>
