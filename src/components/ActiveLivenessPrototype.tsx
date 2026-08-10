@@ -56,6 +56,8 @@ type QualityIssue = {
   message: string;
 };
 
+type BlinkPhase = "waitingOpen" | "waitingClosed" | "waitingReopen" | "confirmed";
+
 const FACE_OVAL = [
   10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176,
   149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10,
@@ -71,8 +73,11 @@ const RIGHT_EYE_BOTTOM = 374;
 const NOSE_TIP = 1;
 const TFLITE_INFO_LOG = "INFO: Created TensorFlow Lite XNNPACK delegate for CPU.";
 
-const USER_YAW_TARGET = 0.105;
-const PITCH_DELTA_TARGET = 0.055;
+const USER_YAW_TARGET = 0.13;
+const FRONT_YAW_LIMIT = 0.04;
+const FRONT_PITCH_MIN = 0.44;
+const FRONT_PITCH_MAX = 0.86;
+const PITCH_DELTA_TARGET = 0.07;
 const EYES_OPEN_EAR = 0.21;
 const EYES_CLOSED_EAR = 0.195;
 const FRONT_HOLD_MS = 3000;
@@ -299,6 +304,15 @@ function stepIndexOf(stepId: LivenessStepId) {
   return steps.findIndex((step) => step.id === stepId);
 }
 
+function isFrontPoseReady(metrics: LivenessMetrics) {
+  return (
+    metrics.score >= SCORE_PASS_THRESHOLD &&
+    Math.abs(metrics.yawRatio) <= FRONT_YAW_LIMIT &&
+    metrics.pitchRatio >= FRONT_PITCH_MIN &&
+    metrics.pitchRatio <= FRONT_PITCH_MAX
+  );
+}
+
 function getQualityIssue(metrics: LivenessMetrics): QualityIssue | null {
   if (!metrics.detected) {
     if (metrics.brightness > 0 && metrics.brightness < 45) {
@@ -410,10 +424,8 @@ export function ActiveLivenessPrototype() {
     down: null,
     up: null,
   });
-  const eyesWereOpenRef = useRef(false);
-  const blinkSeenRef = useRef(false);
+  const blinkPhaseRef = useRef<BlinkPhase>("waitingOpen");
   const baselinePitchRef = useRef<number | null>(null);
-  const downPitchSignRef = useRef<1 | -1 | null>(null);
   const startedAtRef = useRef<number | null>(null);
   const displayedIssueRef = useRef("");
   const issueCandidateRef = useRef<{ key: string; startedAt: number } | null>(null);
@@ -540,10 +552,8 @@ export function ActiveLivenessPrototype() {
     clearStepTransition();
     clearVisibleIssue();
     resetHolds();
-    eyesWereOpenRef.current = false;
-    blinkSeenRef.current = false;
+    blinkPhaseRef.current = "waitingOpen";
     baselinePitchRef.current = null;
-    downPitchSignRef.current = null;
     startedAtRef.current = performance.now();
     moveToStep("frontBlink");
     setElapsedMs(0);
@@ -665,8 +675,7 @@ export function ActiveLivenessPrototype() {
           holdStartRef.current[currentStep] = null;
         }
         if (currentStep === "frontBlink") {
-          eyesWereOpenRef.current = false;
-          blinkSeenRef.current = false;
+          blinkPhaseRef.current = "waitingOpen";
         }
         const noFaceMetrics = buildNoFaceMetrics(video);
         setMetrics(noFaceMetrics);
@@ -700,14 +709,19 @@ export function ActiveLivenessPrototype() {
       }
 
       if (currentStep === "frontBlink") {
-        if (nextMetrics.averageEar > EYES_OPEN_EAR) {
-          eyesWereOpenRef.current = true;
-        }
-        if (eyesWereOpenRef.current && nextMetrics.averageEar < EYES_CLOSED_EAR) {
-          blinkSeenRef.current = true;
+        const frontPoseReady = isFrontPoseReady(nextMetrics);
+
+        if (!frontPoseReady) {
+          blinkPhaseRef.current = "waitingOpen";
+        } else if (blinkPhaseRef.current === "waitingOpen" && nextMetrics.averageEar >= EYES_OPEN_EAR) {
+          blinkPhaseRef.current = "waitingClosed";
+        } else if (blinkPhaseRef.current === "waitingClosed" && nextMetrics.averageEar <= EYES_CLOSED_EAR) {
+          blinkPhaseRef.current = "waitingReopen";
+        } else if (blinkPhaseRef.current === "waitingReopen" && nextMetrics.averageEar >= EYES_OPEN_EAR) {
+          blinkPhaseRef.current = "confirmed";
         }
 
-        if (qualityReady) {
+        if (frontPoseReady && blinkPhaseRef.current === "confirmed") {
           holdStartRef.current.frontBlink ??= now;
         } else {
           holdStartRef.current.frontBlink = null;
@@ -715,7 +729,7 @@ export function ActiveLivenessPrototype() {
 
         const frontHeld =
           holdStartRef.current.frontBlink !== null && now - holdStartRef.current.frontBlink >= FRONT_HOLD_MS;
-        if (frontHeld && blinkSeenRef.current) {
+        if (frontHeld) {
           baselinePitchRef.current = nextMetrics.pitchRatio;
           markPassed("frontBlink");
           scheduleStepAdvance("right");
@@ -742,10 +756,9 @@ export function ActiveLivenessPrototype() {
         holdStartRef.current.left = null;
       }
 
-      if (currentStep === "down" && qualityReady && Math.abs(pitchDelta) >= PITCH_DELTA_TARGET) {
+      if (currentStep === "down" && qualityReady && pitchDelta >= PITCH_DELTA_TARGET) {
         holdStartRef.current.down ??= now;
         if (now - holdStartRef.current.down >= CHALLENGE_HOLD_MS) {
-          downPitchSignRef.current = pitchDelta >= 0 ? 1 : -1;
           markPassed("down");
           scheduleStepAdvance("up");
         }
@@ -753,8 +766,7 @@ export function ActiveLivenessPrototype() {
         holdStartRef.current.down = null;
       }
 
-      const downPitchSign = downPitchSignRef.current ?? 1;
-      if (currentStep === "up" && qualityReady && downPitchSign * pitchDelta <= -PITCH_DELTA_TARGET) {
+      if (currentStep === "up" && qualityReady && pitchDelta <= -PITCH_DELTA_TARGET) {
         holdStartRef.current.up ??= now;
         if (now - holdStartRef.current.up >= CHALLENGE_HOLD_MS) {
           markPassed("up");
@@ -811,7 +823,7 @@ export function ActiveLivenessPrototype() {
     const eyeCenterY = (leftEyeY + rightEyeY) / 2;
     const mouthCenterY = (mouthLeft.y + mouthRight.y) / 2;
     const rawYawRatio = (noseTip.x - eyeCenterX) / Math.max(0.0001, bounds.width);
-    const yawRatio = -rawYawRatio;
+    const yawRatio = rawYawRatio;
     const pitchRatio = (noseTip.y - eyeCenterY) / Math.max(0.0001, mouthCenterY - eyeCenterY);
     const leftEar = eyeAspectRatio(leftEyeOuter, leftEyeInner, leftEyeTop, leftEyeBottom);
     const rightEar = eyeAspectRatio(rightEyeOuter, rightEyeInner, rightEyeTop, rightEyeBottom);
@@ -870,12 +882,26 @@ export function ActiveLivenessPrototype() {
       : currentHoldStart === null || currentNow === 0
         ? 0
         : clamp01((currentNow - currentHoldStart) / currentHoldTarget);
-  const progressPercent = Math.round((passReady ? 1 : clamp01((completedCount + holdProgress) / 5)) * 100);
   const pitchDelta = baselinePitchRef.current === null ? 0 : metrics.pitchRatio - baselinePitchRef.current;
   const yawApproxDegrees = Math.round(metrics.yawRatio * 500);
   const pitchApprox = Math.round(pitchDelta * 1000);
   const statusMessage = errorMessage || displayIssue;
-  const ringState = statusMessage ? "warn" : passReady || isTransitioning ? "pass" : metrics.score >= SCORE_PASS_THRESHOLD ? "ready" : "idle";
+  const currentStepReady =
+    passReady || isTransitioning
+      ? true
+      : activeStep === "frontBlink"
+        ? isFrontPoseReady(metrics) && blinkPhaseRef.current === "confirmed"
+        : activeStep === "right"
+          ? metrics.score >= SCORE_PASS_THRESHOLD && metrics.yawRatio >= USER_YAW_TARGET
+          : activeStep === "left"
+            ? metrics.score >= SCORE_PASS_THRESHOLD && metrics.yawRatio <= -USER_YAW_TARGET
+            : activeStep === "down"
+              ? metrics.score >= SCORE_PASS_THRESHOLD && pitchDelta >= PITCH_DELTA_TARGET
+              : activeStep === "up"
+                ? metrics.score >= SCORE_PASS_THRESHOLD && pitchDelta <= -PITCH_DELTA_TARGET
+                : false;
+  const progressPercent = Math.round((passReady || isTransitioning ? 1 : holdProgress) * 100);
+  const ringState = statusMessage ? "warn" : passReady || isTransitioning ? "pass" : currentStepReady ? "ready" : "idle";
   const actionLabel =
     cameraState === "requesting" || modelState === "loading"
       ? "시작 중"
@@ -995,6 +1021,14 @@ export function ActiveLivenessPrototype() {
                 <strong>{Math.round(holdProgress * 100)}%</strong>
               </div>
               <div>
+                <span>ready</span>
+                <strong>{currentStepReady ? "OK" : "NO"}</strong>
+              </div>
+              <div>
+                <span>blink</span>
+                <strong>{blinkPhaseRef.current}</strong>
+              </div>
+              <div>
                 <span>yaw</span>
                 <strong>{yawApproxDegrees}°</strong>
               </div>
@@ -1037,7 +1071,7 @@ export function ActiveLivenessPrototype() {
             <div className="liveness-result" data-pass={passReady ? "true" : "false"}>
               <strong>{passReady ? "검증 완료" : `${completedCount}/5 단계 완료`}</strong>
               <span>
-                정면은 3초, 회전과 고개 동작은 1.5초 동안 품질 점수 {SCORE_PASS_THRESHOLD}점 이상을 유지해야 통과됩니다.
+                프로그레스바는 현재 스텝 진행률입니다. 정면은 blink 확인 후 3초, 다른 동작은 지정 방향으로 1.5초 유지해야 통과됩니다.
               </span>
             </div>
           </div>
