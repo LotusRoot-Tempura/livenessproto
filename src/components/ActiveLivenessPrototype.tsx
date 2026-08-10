@@ -823,7 +823,7 @@ export function ActiveLivenessPrototype() {
     const eyeCenterY = (leftEyeY + rightEyeY) / 2;
     const mouthCenterY = (mouthLeft.y + mouthRight.y) / 2;
     const rawYawRatio = (noseTip.x - eyeCenterX) / Math.max(0.0001, bounds.width);
-    const yawRatio = rawYawRatio;
+    const yawRatio = -rawYawRatio;
     const pitchRatio = (noseTip.y - eyeCenterY) / Math.max(0.0001, mouthCenterY - eyeCenterY);
     const leftEar = eyeAspectRatio(leftEyeOuter, leftEyeInner, leftEyeTop, leftEyeBottom);
     const rightEar = eyeAspectRatio(rightEyeOuter, rightEyeInner, rightEyeTop, rightEyeBottom);
