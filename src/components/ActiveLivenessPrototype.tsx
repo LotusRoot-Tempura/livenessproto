@@ -51,6 +51,11 @@ type ChallengeState = {
   up: boolean;
 };
 
+type QualityIssue = {
+  key: string;
+  message: string;
+};
+
 const FACE_OVAL = [
   10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176,
   149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10,
@@ -70,9 +75,11 @@ const USER_YAW_TARGET = 0.105;
 const PITCH_DELTA_TARGET = 0.055;
 const EYES_OPEN_EAR = 0.21;
 const EYES_CLOSED_EAR = 0.195;
-const FRONT_HOLD_MS = 1500;
-const CHALLENGE_HOLD_MS = 750;
+const FRONT_HOLD_MS = 3000;
+const CHALLENGE_HOLD_MS = 1500;
 const SCORE_PASS_THRESHOLD = 82;
+const ISSUE_VISIBLE_DELAY_MS = 1500;
+const STEP_TRANSITION_MS = 1300;
 
 const initialMetrics: LivenessMetrics = {
   detected: false,
@@ -264,44 +271,7 @@ function drawOverlay(
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
 
   const cx = canvas.clientWidth / 2;
-  const cy = canvas.clientHeight * 0.47;
-  const rx = canvas.clientWidth * 0.25;
-  const ry = canvas.clientHeight * 0.31;
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = metrics.score >= SCORE_PASS_THRESHOLD ? "rgba(31, 122, 84, 0.96)" : "rgba(255, 255, 255, 0.82)";
-  ctx.setLineDash([8, 8]);
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
   if (!landmarks) return;
-
-  ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-  ctx.strokeStyle = metrics.score >= SCORE_PASS_THRESHOLD ? "rgba(94, 234, 212, 0.85)" : "rgba(147, 197, 253, 0.72)";
-  ctx.lineWidth = 1;
-
-  for (let index = 0; index < FACE_OVAL.length - 1; index += 1) {
-    const start = landmarks[FACE_OVAL[index]];
-    const end = landmarks[FACE_OVAL[index + 1]];
-    if (!start || !end) continue;
-    const a = mapPoint(start, video, canvas);
-    const b = mapPoint(end, video, canvas);
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
-  }
-
-  const points = [LEFT_EYE_OUTER, LEFT_EYE_INNER, RIGHT_EYE_INNER, RIGHT_EYE_OUTER, NOSE_TIP];
-  for (const pointId of points) {
-    const point = landmarks[pointId];
-    if (!point) continue;
-    const mapped = mapPoint(point, video, canvas);
-    ctx.beginPath();
-    ctx.arc(mapped.x, mapped.y, 2.2, 0, Math.PI * 2);
-    ctx.fill();
-  }
 
   if (activeStep === "right" || activeStep === "left" || activeStep === "down" || activeStep === "up") {
     const isHorizontal = activeStep === "right" || activeStep === "left";
@@ -329,54 +299,93 @@ function stepIndexOf(stepId: LivenessStepId) {
   return steps.findIndex((step) => step.id === stepId);
 }
 
-function getQualityBlockMessage(metrics: LivenessMetrics) {
+function getQualityIssue(metrics: LivenessMetrics): QualityIssue | null {
   if (!metrics.detected) {
     if (metrics.brightness > 0 && metrics.brightness < 45) {
-      return "어두운 환경에서는 얼굴 인식이 어렵습니다. 조명을 켜고 얼굴을 밝게 비춰 주세요.";
+      return {
+        key: "no-face-dark",
+        message: "어두운 환경에서는 얼굴 인식이 어렵습니다. 조명을 켜고 얼굴을 밝게 비춰 주세요.",
+      };
     }
     if (metrics.brightness > 228) {
-      return "빛이 너무 강하거나 역광입니다. 얼굴이 하얗게 날아가지 않도록 방향을 조정해 주세요.";
+      return {
+        key: "no-face-overexposed",
+        message: "빛이 너무 강하거나 역광입니다. 얼굴이 하얗게 날아가지 않도록 방향을 조정해 주세요.",
+      };
     }
     if (metrics.contrast > 0 && metrics.contrast < 10) {
-      return "얼굴과 배경 구분이 약합니다. 조명 방향을 바꾸거나 더 밝은 곳에서 시도해 주세요.";
+      return {
+        key: "no-face-low-contrast",
+        message: "얼굴과 배경 구분이 약합니다. 조명 방향을 바꾸거나 더 밝은 곳에서 시도해 주세요.",
+      };
     }
-    return "얼굴이 화면에 보이지 않습니다. 얼굴 전체가 안내선 안에 들어오게 맞춰 주세요.";
+    return {
+      key: "no-face",
+      message: "얼굴이 화면에 보이지 않습니다. 얼굴 전체가 안내선 안에 들어오게 맞춰 주세요.",
+    };
   }
 
   if (!metrics.singleFace) {
-    return "두 명 이상이 화면에 잡혔습니다. 인증 대상 한 명만 화면에 나오게 해 주세요.";
+    return {
+      key: "multi-face",
+      message: "두 명 이상이 화면에 잡혔습니다. 인증 대상 한 명만 화면에 나오게 해 주세요.",
+    };
   }
 
   if (!metrics.properSize) {
     if (metrics.faceWidth < 0.24 || metrics.faceHeight < 0.32) {
-      return "얼굴이 너무 작게 보입니다. 카메라에 조금 더 가까이 다가와 주세요.";
+      return {
+        key: "face-too-small",
+        message: "얼굴이 너무 작게 보입니다. 카메라에 조금 더 가까이 다가와 주세요.",
+      };
     }
-    return "얼굴이 너무 크게 보입니다. 카메라에서 조금 더 떨어져 주세요.";
+    return {
+      key: "face-too-large",
+      message: "얼굴이 너무 크게 보입니다. 카메라에서 조금 더 떨어져 주세요.",
+    };
   }
 
   if (!metrics.centered) {
-    return "얼굴이 프레임 중앙에서 벗어났습니다. 화면 중앙에 얼굴을 맞춰 주세요.";
+    return {
+      key: "off-center",
+      message: "얼굴이 프레임 중앙에서 벗어났습니다. 화면 중앙에 얼굴을 맞춰 주세요.",
+    };
   }
 
   if (!metrics.lightingGood) {
     if (metrics.brightness < 55) {
-      return "조명이 어두워 얼굴 특징점을 읽기 어렵습니다. 불을 켜거나 밝은 곳으로 이동해 주세요.";
+      return {
+        key: "dark",
+        message: "조명이 어두워 얼굴 특징점을 읽기 어렵습니다. 불을 켜거나 밝은 곳으로 이동해 주세요.",
+      };
     }
     if (metrics.brightness > 218) {
-      return "조명이 너무 강합니다. 역광이나 직사광선을 피해서 얼굴 윤곽이 보이게 해 주세요.";
+      return {
+        key: "overexposed",
+        message: "조명이 너무 강합니다. 역광이나 직사광선을 피해서 얼굴 윤곽이 보이게 해 주세요.",
+      };
     }
-    return "조명 대비가 낮아 얼굴 윤곽이 흐립니다. 얼굴 쪽 조명을 고르게 맞춰 주세요.";
+    return {
+      key: "low-contrast",
+      message: "조명 대비가 낮아 얼굴 윤곽이 흐립니다. 얼굴 쪽 조명을 고르게 맞춰 주세요.",
+    };
   }
 
   if (!metrics.occlusionClear) {
-    return "눈, 코, 입 주변이 가려져 인식이 어렵습니다. 일반 안경은 허용하지만 눈 반사나 선글라스는 피해주세요.";
+    return {
+      key: "occlusion",
+      message: "눈 주변 특징점이 흐립니다. 반사가 강한 안경이나 선글라스는 잠시 피해주세요.",
+    };
   }
 
   if (metrics.score < SCORE_PASS_THRESHOLD) {
-    return `품질 점수 ${SCORE_PASS_THRESHOLD}점 이상이 필요합니다. 얼굴 위치와 조명을 조금 더 맞춰 주세요.`;
+    return {
+      key: "low-score",
+      message: `품질 점수 ${SCORE_PASS_THRESHOLD}점 이상이 필요합니다. 얼굴 위치와 조명을 조금 더 맞춰 주세요.`,
+    };
   }
 
-  return "";
+  return null;
 }
 
 export function ActiveLivenessPrototype() {
@@ -406,6 +415,10 @@ export function ActiveLivenessPrototype() {
   const baselinePitchRef = useRef<number | null>(null);
   const downPitchSignRef = useRef<1 | -1 | null>(null);
   const startedAtRef = useRef<number | null>(null);
+  const displayedIssueRef = useRef("");
+  const issueCandidateRef = useRef<{ key: string; startedAt: number } | null>(null);
+  const transitionTimeoutRef = useRef<number | null>(null);
+  const transitioningRef = useRef(false);
 
   const [cameraState, setCameraState] = useState<CameraState>("idle");
   const [modelState, setModelState] = useState<ModelState>("idle");
@@ -420,6 +433,9 @@ export function ActiveLivenessPrototype() {
   });
   const [elapsedMs, setElapsedMs] = useState(0);
   const [errorMessage, setErrorMessage] = useState("");
+  const [displayIssue, setDisplayIssue] = useState("");
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const moveToStep = (step: LivenessStepId) => {
     activeStepRef.current = step;
@@ -431,6 +447,17 @@ export function ActiveLivenessPrototype() {
     setChallenge(next);
   };
 
+  const setVisibleIssue = (message: string) => {
+    if (displayedIssueRef.current === message) return;
+    displayedIssueRef.current = message;
+    setDisplayIssue(message);
+  };
+
+  const clearVisibleIssue = () => {
+    issueCandidateRef.current = null;
+    setVisibleIssue("");
+  };
+
   const stopLoop = () => {
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
@@ -440,6 +467,8 @@ export function ActiveLivenessPrototype() {
 
   const stopCamera = () => {
     stopLoop();
+    clearStepTransition();
+    clearVisibleIssue();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (videoRef.current) {
@@ -458,7 +487,58 @@ export function ActiveLivenessPrototype() {
     };
   };
 
+  const clearStepTransition = () => {
+    if (transitionTimeoutRef.current !== null) {
+      window.clearTimeout(transitionTimeoutRef.current);
+      transitionTimeoutRef.current = null;
+    }
+    transitioningRef.current = false;
+    setIsTransitioning(false);
+  };
+
+  const scheduleStepAdvance = (nextStep: LivenessStepId) => {
+    if (transitioningRef.current) return;
+    transitioningRef.current = true;
+    setIsTransitioning(true);
+    clearVisibleIssue();
+    resetHolds();
+
+    transitionTimeoutRef.current = window.setTimeout(() => {
+      transitionTimeoutRef.current = null;
+      transitioningRef.current = false;
+      setIsTransitioning(false);
+      resetHolds();
+      moveToStep(nextStep);
+    }, STEP_TRANSITION_MS);
+  };
+
+  const updateVisibleIssue = (nextMetrics: LivenessMetrics, now: number) => {
+    if (activeStepRef.current === "complete" || transitioningRef.current) {
+      clearVisibleIssue();
+      return;
+    }
+
+    const issue = getQualityIssue(nextMetrics);
+    if (!issue) {
+      clearVisibleIssue();
+      return;
+    }
+
+    const candidate = issueCandidateRef.current;
+    if (!candidate || candidate.key !== issue.key) {
+      issueCandidateRef.current = { key: issue.key, startedAt: now };
+      setVisibleIssue("");
+      return;
+    }
+
+    if (now - candidate.startedAt >= ISSUE_VISIBLE_DELAY_MS) {
+      setVisibleIssue(issue.message);
+    }
+  };
+
   const resetSession = () => {
+    clearStepTransition();
+    clearVisibleIssue();
     resetHolds();
     eyesWereOpenRef.current = false;
     blinkSeenRef.current = false;
@@ -507,6 +587,12 @@ export function ActiveLivenessPrototype() {
   };
 
   const startCamera = async () => {
+    stopLoop();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
     setErrorMessage("");
     resetSession();
     setCameraState("requesting");
@@ -564,17 +650,18 @@ export function ActiveLivenessPrototype() {
         return;
       }
 
-      const result = withSuppressedTfliteInfo(() => landmarker.detectForVideo(video, performance.now()));
+      const now = performance.now();
+      const result = withSuppressedTfliteInfo(() => landmarker.detectForVideo(video, now));
       const faces = result?.faceLandmarks ?? [];
       const landmarks = faces[0] ?? null;
 
       if (startedAtRef.current) {
-        setElapsedMs(performance.now() - startedAtRef.current);
+        setElapsedMs(now - startedAtRef.current);
       }
 
       if (!landmarks) {
         const currentStep = activeStepRef.current;
-        if (currentStep !== "complete") {
+        if (currentStep !== "complete" && !transitioningRef.current) {
           holdStartRef.current[currentStep] = null;
         }
         if (currentStep === "frontBlink") {
@@ -583,6 +670,7 @@ export function ActiveLivenessPrototype() {
         }
         const noFaceMetrics = buildNoFaceMetrics(video);
         setMetrics(noFaceMetrics);
+        updateVisibleIssue(noFaceMetrics, now);
         drawOverlay(canvas, video, null, noFaceMetrics, currentStep);
         rafRef.current = requestAnimationFrame(tick);
         return;
@@ -592,8 +680,8 @@ export function ActiveLivenessPrototype() {
       setMetrics(nextMetrics);
       const currentStep = activeStepRef.current;
       drawOverlay(canvas, video, landmarks, nextMetrics, currentStep);
+      updateVisibleIssue(nextMetrics, now);
 
-      const now = performance.now();
       let nextChallenge = challengeRef.current;
       let changed = false;
       const qualityReady = nextMetrics.score >= SCORE_PASS_THRESHOLD;
@@ -605,6 +693,11 @@ export function ActiveLivenessPrototype() {
         nextChallenge = { ...nextChallenge, [key]: true };
         changed = true;
       };
+
+      if (transitioningRef.current) {
+        rafRef.current = requestAnimationFrame(tick);
+        return;
+      }
 
       if (currentStep === "frontBlink") {
         if (nextMetrics.averageEar > EYES_OPEN_EAR) {
@@ -625,7 +718,7 @@ export function ActiveLivenessPrototype() {
         if (frontHeld && blinkSeenRef.current) {
           baselinePitchRef.current = nextMetrics.pitchRatio;
           markPassed("frontBlink");
-          moveToStep("right");
+          scheduleStepAdvance("right");
         }
       }
 
@@ -633,7 +726,7 @@ export function ActiveLivenessPrototype() {
         holdStartRef.current.right ??= now;
         if (now - holdStartRef.current.right >= CHALLENGE_HOLD_MS) {
           markPassed("right");
-          moveToStep("left");
+          scheduleStepAdvance("left");
         }
       } else if (currentStep === "right") {
         holdStartRef.current.right = null;
@@ -643,7 +736,7 @@ export function ActiveLivenessPrototype() {
         holdStartRef.current.left ??= now;
         if (now - holdStartRef.current.left >= CHALLENGE_HOLD_MS) {
           markPassed("left");
-          moveToStep("down");
+          scheduleStepAdvance("down");
         }
       } else if (currentStep === "left") {
         holdStartRef.current.left = null;
@@ -654,7 +747,7 @@ export function ActiveLivenessPrototype() {
         if (now - holdStartRef.current.down >= CHALLENGE_HOLD_MS) {
           downPitchSignRef.current = pitchDelta >= 0 ? 1 : -1;
           markPassed("down");
-          moveToStep("up");
+          scheduleStepAdvance("up");
         }
       } else if (currentStep === "down") {
         holdStartRef.current.down = null;
@@ -665,7 +758,7 @@ export function ActiveLivenessPrototype() {
         holdStartRef.current.up ??= now;
         if (now - holdStartRef.current.up >= CHALLENGE_HOLD_MS) {
           markPassed("up");
-          moveToStep("complete");
+          scheduleStepAdvance("complete");
         }
       } else if (currentStep === "up") {
         holdStartRef.current.up = null;
@@ -694,8 +787,6 @@ export function ActiveLivenessPrototype() {
     const noseTip = landmarks[NOSE_TIP];
     const mouthLeft = landmarks[61];
     const mouthRight = landmarks[291];
-    const upperLip = landmarks[13];
-    const lowerLip = landmarks[14];
 
     if (
       !bounds ||
@@ -709,9 +800,7 @@ export function ActiveLivenessPrototype() {
       !rightEyeBottom ||
       !noseTip ||
       !mouthLeft ||
-      !mouthRight ||
-      !upperLip ||
-      !lowerLip
+      !mouthRight
     ) {
       return initialMetrics;
     }
@@ -729,14 +818,16 @@ export function ActiveLivenessPrototype() {
     const averageEar = (leftEar + rightEar) / 2;
     const eyeWidthRatio = Math.max(leftEar, rightEar) / Math.max(0.0001, Math.min(leftEar, rightEar));
     const mouthWidthRatio = distance(mouthLeft, mouthRight) / Math.max(0.0001, bounds.width);
-    const mouthOpenRatio = distance(upperLip, lowerLip) / Math.max(0.0001, bounds.height);
     const lightingCanvas = lightingCanvasRef.current ?? document.createElement("canvas");
     lightingCanvasRef.current = lightingCanvas;
     const lighting = getLighting(video, lightingCanvas);
     const centered = Math.abs(bounds.centerX - 0.5) < 0.12 && Math.abs(bounds.centerY - 0.51) < 0.15;
     const properSize = bounds.width > 0.24 && bounds.width < 0.62 && bounds.height > 0.32 && bounds.height < 0.82;
     const singleFace = faceCount === 1;
-    const occlusionClear = !(eyeWidthRatio > 2.35 || averageEar < 0.052 || mouthWidthRatio < 0.1 || mouthOpenRatio < 0.0025);
+    const eyesUnavailable = averageEar < 0.035;
+    const eyeModelUnstable = eyeWidthRatio > 3.4 && averageEar < EYES_OPEN_EAR;
+    const mouthUnavailable = mouthWidthRatio < 0.055;
+    const occlusionClear = !(eyesUnavailable || eyeModelUnstable || mouthUnavailable);
 
     const scoreParts = [
       1,
@@ -770,21 +861,41 @@ export function ActiveLivenessPrototype() {
   const completedCount =
     Number(challenge.frontBlink) + Number(challenge.right) + Number(challenge.left) + Number(challenge.down) + Number(challenge.up);
   const passReady = activeStep === "complete";
+  const currentHoldStart = activeStep === "complete" ? null : holdStartRef.current[activeStep];
+  const currentHoldTarget = activeStep === "frontBlink" ? FRONT_HOLD_MS : CHALLENGE_HOLD_MS;
+  const currentNow = startedAtRef.current === null ? 0 : startedAtRef.current + elapsedMs;
+  const holdProgress =
+    passReady || isTransitioning
+      ? 1
+      : currentHoldStart === null || currentNow === 0
+        ? 0
+        : clamp01((currentNow - currentHoldStart) / currentHoldTarget);
+  const progressPercent = Math.round((passReady ? 1 : clamp01((completedCount + holdProgress) / 5)) * 100);
   const pitchDelta = baselinePitchRef.current === null ? 0 : metrics.pitchRatio - baselinePitchRef.current;
-  const yawApproxDegrees = Math.round(Math.abs(metrics.yawRatio) * 500);
+  const yawApproxDegrees = Math.round(metrics.yawRatio * 500);
   const pitchApprox = Math.round(pitchDelta * 1000);
+  const statusMessage = errorMessage || displayIssue;
+  const ringState = statusMessage ? "warn" : passReady || isTransitioning ? "pass" : metrics.score >= SCORE_PASS_THRESHOLD ? "ready" : "idle";
+  const actionLabel =
+    cameraState === "requesting" || modelState === "loading"
+      ? "시작 중"
+      : cameraState === "running"
+        ? "다시 시작하기"
+        : cameraState === "failed"
+          ? "다시 시도하기"
+          : "카메라 시작하기";
 
   const primaryInstruction = useMemo(() => {
-    if (cameraState !== "running") return "카메라를 시작하세요.";
-    const qualityBlockMessage = getQualityBlockMessage(metrics);
-    if (qualityBlockMessage) return qualityBlockMessage;
-    if (activeStep === "frontBlink") return "정면을 1.5초 유지하고 눈을 한 번 깜빡이세요.";
-    if (activeStep === "right") return "고개를 오른쪽으로 크게 돌리고 0.75초 유지하세요.";
-    if (activeStep === "left") return "고개를 왼쪽으로 크게 돌리고 0.75초 유지하세요.";
-    if (activeStep === "down") return "턱을 아래로 당겨 고개를 숙이고 0.75초 유지하세요.";
-    if (activeStep === "up") return "턱을 들어 얼굴을 위로 향하고 0.75초 유지하세요.";
-    return "라이브니스 통과";
-  }, [activeStep, cameraState, metrics]);
+    if (cameraState === "requesting" || modelState === "loading") return "카메라를 준비하고 있습니다";
+    if (cameraState !== "running") return "카메라를 시작하세요";
+    if (isTransitioning) return "좋아요!";
+    if (activeStep === "frontBlink") return "얼굴을 원 안에 맞추고 눈을 깜빡여주세요";
+    if (activeStep === "right") return "오른쪽으로 천천히 돌려주세요";
+    if (activeStep === "left") return "왼쪽으로 천천히 돌려주세요";
+    if (activeStep === "down") return "고개를 아래로 살짝 숙여주세요";
+    if (activeStep === "up") return "고개를 위로 살짝 들어주세요";
+    return "인증이 완료되었습니다";
+  }, [activeStep, cameraState, isTransitioning, modelState]);
 
   const qualityChecks = [
     ["얼굴", metrics.detected, metrics.detected ? 1 : 0],
@@ -796,116 +907,142 @@ export function ActiveLivenessPrototype() {
   ] as const;
 
   return (
-    <section className="liveness-shell">
+    <section className="liveness-shell" data-camera={cameraState}>
+      <header className="liveness-topbar">
+        <button type="button" className="liveness-back-button" aria-label="뒤로가기" onClick={() => window.history.back()}>
+          ‹
+        </button>
+        <strong>Face ID 등록</strong>
+        <button type="button" className="liveness-detail-button" onClick={() => setDetailOpen(true)}>
+          Detail
+        </button>
+      </header>
+
       <div className="liveness-stage">
-        <div className="liveness-camera">
+        <div className="liveness-camera" data-ring={ringState}>
           <video ref={videoRef} muted playsInline autoPlay />
           <canvas ref={overlayRef} className="liveness-overlay" />
           <div className="liveness-vignette" />
-          <div className="liveness-prompt">
-            <span>{activeStepInfo.shortLabel}</span>
-            <strong>{primaryInstruction}</strong>
+          {cameraState === "running" || cameraState === "requesting" ? <div className="liveness-face-guide" aria-hidden="true" /> : null}
+          {cameraState === "idle" || cameraState === "failed" ? (
+            <div className="liveness-idle">
+              <div className="liveness-brand-mark">GT</div>
+              <strong>
+                Grab <span>Ticket</span>
+              </strong>
+              <p>Liveness UI/UX 프로토타입</p>
+            </div>
+          ) : null}
+          <div className="liveness-prompt" aria-live="polite">
+            <strong key={`${activeStep}-${isTransitioning}-${primaryInstruction}`}>{primaryInstruction}</strong>
           </div>
-          <div className="liveness-score-ring" data-pass={passReady ? "true" : "false"}>
-            <span>{passReady ? "PASS" : metrics.score}</span>
+          <div className="liveness-progress" aria-hidden="true">
+            <span style={{ width: `${progressPercent}%` }} />
           </div>
         </div>
       </div>
 
-      <aside className="liveness-panel">
-        <div className="liveness-header">
-          <div>
-            <p>Active Liveness</p>
-            <h1>실물 움직임 검증</h1>
-          </div>
-          <Badge tone={passReady ? "success" : cameraState === "running" ? "info" : "warning"}>
-            {passReady ? "통과" : cameraState === "running" ? "진행 중" : "대기"}
-          </Badge>
-        </div>
+      <div className="liveness-toast" data-visible={statusMessage ? "true" : "false"} role="status" aria-live="polite">
+        {statusMessage}
+      </div>
 
-        <div className="liveness-actions">
-          <Button onClick={startCamera} disabled={cameraState === "requesting" || modelState === "loading"}>
-            {cameraState === "running" ? "다시 시작" : cameraState === "requesting" ? "시작 중" : "카메라 시작"}
-          </Button>
-          <Button variant="secondary" onClick={resetSession} disabled={cameraState !== "running"}>
-            초기화
-          </Button>
-          <Button variant="secondary" onClick={stopCamera} disabled={cameraState !== "running"}>
-            종료
-          </Button>
-        </div>
+      <footer className="liveness-actions">
+        <Button onClick={startCamera} disabled={cameraState === "requesting" || modelState === "loading"}>
+          {actionLabel}
+        </Button>
+        <button type="button" className="liveness-reset-link" onClick={resetSession} disabled={cameraState !== "running"}>
+          초기화
+        </button>
+      </footer>
 
-        {errorMessage ? <div className="liveness-alert">{errorMessage}</div> : null}
-
-        <div className="liveness-steps">
-          {steps.map((step, index) => {
-            const done =
-              step.id === "complete"
-                ? passReady
-                : step.id === "frontBlink"
-                  ? challenge.frontBlink
-                  : step.id === "right"
-                    ? challenge.right
-                    : step.id === "left"
-                      ? challenge.left
-                      : step.id === "down"
-                        ? challenge.down
-                        : challenge.up;
-            const active = index === currentStepIndex;
-            return (
-              <div key={step.id} className="liveness-step" data-active={active ? "true" : "false"} data-done={done ? "true" : "false"}>
-                <span>{index + 1}</span>
-                <strong>{step.label}</strong>
+      {detailOpen ? (
+        <div className="liveness-detail-backdrop" role="dialog" aria-modal="true" aria-label="라이브니스 상세 점수" onClick={() => setDetailOpen(false)}>
+          <div className="liveness-detail-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="liveness-detail-header">
+              <div>
+                <span>Active Liveness</span>
+                <strong>{passReady ? "PASS" : activeStepInfo.label}</strong>
               </div>
-            );
-          })}
-        </div>
+              <button type="button" onClick={() => setDetailOpen(false)}>
+                닫기
+              </button>
+            </div>
 
-        <div className="liveness-quality">
-          <div className="liveness-quality__top">
-            <strong>품질 점수</strong>
-            <span>{metrics.score}/100</span>
-          </div>
-          <div className="liveness-meter">
-            <span style={{ width: `${metrics.score}%` }} />
-          </div>
-          <div className="liveness-badges">
-            {qualityChecks.map(([label, ok, progress]) => (
-              <Badge key={label} tone={ok ? "success" : "warning"} progress={progress}>
-                {label}
-              </Badge>
-            ))}
-          </div>
-        </div>
+            <div className="liveness-quality">
+              <div className="liveness-quality__top">
+                <strong>품질 점수</strong>
+                <span>{metrics.score}/100</span>
+              </div>
+              <div className="liveness-meter">
+                <span style={{ width: `${metrics.score}%` }} />
+              </div>
+              <div className="liveness-badges">
+                {qualityChecks.map(([label, ok, progress]) => (
+                  <Badge key={label} tone={ok ? "success" : "warning"} progress={progress}>
+                    {label}
+                  </Badge>
+                ))}
+              </div>
+            </div>
 
-        <div className="liveness-readout">
-          <div>
-            <span>yaw</span>
-            <strong>{yawApproxDegrees}°</strong>
-          </div>
-          <div>
-            <span>pitch</span>
-            <strong>{pitchApprox}</strong>
-          </div>
-          <div>
-            <span>EAR</span>
-            <strong>{formatNumber(metrics.averageEar, 3)}</strong>
-          </div>
-          <div>
-            <span>light</span>
-            <strong>{Math.round(metrics.brightness)}</strong>
-          </div>
-        </div>
+            <div className="liveness-readout">
+              <div>
+                <span>step</span>
+                <strong>{passReady ? "완료" : `${currentStepIndex + 1}/5`}</strong>
+              </div>
+              <div>
+                <span>hold</span>
+                <strong>{Math.round(holdProgress * 100)}%</strong>
+              </div>
+              <div>
+                <span>yaw</span>
+                <strong>{yawApproxDegrees}°</strong>
+              </div>
+              <div>
+                <span>pitch</span>
+                <strong>{pitchApprox}</strong>
+              </div>
+              <div>
+                <span>EAR</span>
+                <strong>{formatNumber(metrics.averageEar, 3)}</strong>
+              </div>
+              <div>
+                <span>light</span>
+                <strong>{Math.round(metrics.brightness)}</strong>
+              </div>
+            </div>
 
-        <div className="liveness-result" data-pass={passReady ? "true" : "false"}>
-          <strong>{passReady ? "검증 완료" : `${completedCount}/5 단계 완료`}</strong>
-          <span>
-            {passReady
-              ? "정면, 눈깜빡임, 좌우 회전, 고개 숙임/들림 챌린지가 모두 통과되었습니다."
-              : "각 단계에서 품질 점수 82점 이상을 유지해야 다음 동작으로 넘어갑니다."}
-          </span>
+            <div className="liveness-steps">
+              {steps.slice(0, 5).map((step, index) => {
+                const done =
+                  step.id === "frontBlink"
+                    ? challenge.frontBlink
+                    : step.id === "right"
+                      ? challenge.right
+                      : step.id === "left"
+                        ? challenge.left
+                        : step.id === "down"
+                          ? challenge.down
+                          : challenge.up;
+                const active = index === currentStepIndex && !passReady;
+                return (
+                  <div key={step.id} className="liveness-step" data-active={active ? "true" : "false"} data-done={done ? "true" : "false"}>
+                    <span>{index + 1}</span>
+                    <strong>{step.label}</strong>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="liveness-result" data-pass={passReady ? "true" : "false"}>
+              <strong>{passReady ? "검증 완료" : `${completedCount}/5 단계 완료`}</strong>
+              <span>
+                정면은 3초, 회전과 고개 동작은 1.5초 동안 품질 점수 {SCORE_PASS_THRESHOLD}점 이상을 유지해야 통과됩니다.
+              </span>
+            </div>
+          </div>
         </div>
-      </aside>
+      ) : null}
     </section>
   );
 }
