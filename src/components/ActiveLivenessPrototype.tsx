@@ -68,6 +68,12 @@ type RegionSignal = {
   edge: number;
   saturation: number;
 };
+type MouthLineSignal = {
+  seamDarkness: number;
+  lineContrast: number;
+  lineEdge: number;
+  lineBrightness: number;
+};
 
 const FACE_OVAL = [
   10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176,
@@ -310,6 +316,60 @@ function getRegionSignal(frame: PixelFrame | null, points: LandmarkPoint[], padd
     contrast: Math.sqrt(variance),
     edge: edgeTotal / Math.max(1, edgeCount),
     saturation: saturationTotal / count,
+  };
+}
+
+function getFrameLuma(frame: PixelFrame, x: number, y: number) {
+  const pixelX = Math.max(0, Math.min(frame.width - 1, Math.round(x * frame.width)));
+  const pixelY = Math.max(0, Math.min(frame.height - 1, Math.round(y * frame.height)));
+  const pixelIndex = (pixelY * frame.width + pixelX) * 4;
+  const r = frame.data[pixelIndex] ?? 0;
+  const g = frame.data[pixelIndex + 1] ?? 0;
+  const b = frame.data[pixelIndex + 2] ?? 0;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function getMouthLineSignal(
+  frame: PixelFrame | null,
+  mouthLeft: LandmarkPoint,
+  mouthRight: LandmarkPoint,
+  upperLip: LandmarkPoint,
+  lowerLip: LandmarkPoint,
+  faceHeight: number,
+): MouthLineSignal {
+  if (!frame) {
+    return { seamDarkness: 0, lineContrast: 0, lineEdge: 0, lineBrightness: 255 };
+  }
+
+  const verticalOffset = Math.max(0.006, faceHeight * 0.02);
+  const lineY = (upperLip.y + lowerLip.y) / 2;
+  const samples: number[] = [];
+  const upperSamples: number[] = [];
+  const lowerSamples: number[] = [];
+
+  for (let index = 0; index < 13; index += 1) {
+    const t = 0.16 + index * 0.056;
+    const x = mouthLeft.x + (mouthRight.x - mouthLeft.x) * t;
+    const cornerY = mouthLeft.y + (mouthRight.y - mouthLeft.y) * t;
+    const y = lineY * 0.74 + cornerY * 0.26;
+    samples.push(getFrameLuma(frame, x, y));
+    upperSamples.push(getFrameLuma(frame, x, y - verticalOffset));
+    lowerSamples.push(getFrameLuma(frame, x, y + verticalOffset));
+  }
+
+  const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+  const lineBrightness = average(samples);
+  const surroundingBrightness = (average(upperSamples) + average(lowerSamples)) / 2;
+  const lineVariance = samples.reduce((sum, value) => sum + Math.pow(value - lineBrightness, 2), 0) / Math.max(1, samples.length);
+  const lineEdge =
+    samples.slice(1).reduce((sum, value, index) => sum + Math.abs(value - (samples[index] ?? value)), 0) /
+    Math.max(1, samples.length - 1);
+
+  return {
+    seamDarkness: surroundingBrightness - lineBrightness,
+    lineContrast: Math.sqrt(lineVariance),
+    lineEdge,
+    lineBrightness,
   };
 }
 
@@ -991,6 +1051,7 @@ export function ActiveLivenessPrototype() {
     const rightEyeSignal = getRegionSignal(pixelFrame, rightEyeDense, 0.035, 0.03);
     const noseSignal = getRegionSignal(pixelFrame, noseDense, 0.028, 0.035);
     const mouthSignal = getRegionSignal(pixelFrame, mouthDense, 0.035, 0.03);
+    const mouthLineSignal = getMouthLineSignal(pixelFrame, mouthLeft, mouthRight, upperLip, lowerLip, bounds.height);
     const centered = Math.abs(bounds.centerX - 0.5) < 0.12 && Math.abs(bounds.centerY - 0.51) < 0.15;
     const properSize = bounds.width > 0.24 && bounds.width < 0.62 && bounds.height > 0.32 && bounds.height < 0.82;
     const singleFace = faceCount === 1;
@@ -1028,6 +1089,12 @@ export function ActiveLivenessPrototype() {
       lipGapRatio < 0.18 &&
       mouthCenterY > noseTip.y + bounds.height * 0.065 &&
       getBoundsArea(mouthDense) / faceArea > 0.006;
+    const mouthSeamClear =
+      mouthLineSignal.seamDarkness >= 3.2 &&
+      mouthLineSignal.lineBrightness < mouthSignal.brightness - 1.4 &&
+      mouthLineSignal.lineBrightness > 18 &&
+      mouthLineSignal.lineBrightness < 220 &&
+      (mouthLineSignal.lineEdge >= 1.2 || mouthLineSignal.lineContrast >= 2.8);
     const eyesTextureClear =
       leftEyeSignal.brightness > 24 &&
       rightEyeSignal.brightness > 24 &&
@@ -1043,7 +1110,8 @@ export function ActiveLivenessPrototype() {
       mouthSignal.brightness > 24 &&
       mouthSignal.brightness < 236 &&
       mouthSignal.contrast >= 5.0 &&
-      mouthSignal.edge >= 2.0;
+      mouthSignal.edge >= 2.0 &&
+      mouthSeamClear;
     const occlusionClear =
       eyesShapeClear && noseShapeClear && mouthShapeClear && eyesTextureClear && noseTextureClear && mouthTextureClear;
 
