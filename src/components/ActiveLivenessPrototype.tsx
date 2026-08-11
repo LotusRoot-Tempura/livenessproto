@@ -74,6 +74,16 @@ type MouthLineSignal = {
   lineEdge: number;
   lineBrightness: number;
 };
+type VisualLayerId = "mesh" | "contours" | "keyPoints" | "vectors";
+type VisualLayerState = Record<VisualLayerId, boolean>;
+type LandmarkConnection = {
+  start: number;
+  end: number;
+};
+type LandmarkConnectionSets = {
+  mesh: LandmarkConnection[];
+  contours: LandmarkConnection[];
+};
 
 const FACE_OVAL = [
   10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176,
@@ -111,6 +121,45 @@ const ISSUE_VISIBLE_DELAY_MS = 1500;
 const STEP_TRANSITION_MS = 1300;
 const OCCLUSION_SAMPLE_WIDTH = 128;
 const OCCLUSION_SAMPLE_HEIGHT = 96;
+const initialVisualLayers: VisualLayerState = {
+  mesh: false,
+  contours: false,
+  keyPoints: false,
+  vectors: false,
+};
+const VISUAL_LAYER_OPTIONS: { id: VisualLayerId; label: string }[] = [
+  { id: "mesh", label: "mesh" },
+  { id: "contours", label: "contours" },
+  { id: "keyPoints", label: "key points" },
+  { id: "vectors", label: "vectors" },
+];
+const KEY_LANDMARKS = [
+  { index: 1, label: "1" },
+  { index: 10, label: "10" },
+  { index: 13, label: "13" },
+  { index: 14, label: "14" },
+  { index: 33, label: "33" },
+  { index: 61, label: "61" },
+  { index: 98, label: "98" },
+  { index: 133, label: "133" },
+  { index: 145, label: "145" },
+  { index: 152, label: "152" },
+  { index: 159, label: "159" },
+  { index: 168, label: "168" },
+  { index: 263, label: "263" },
+  { index: 291, label: "291" },
+  { index: 327, label: "327" },
+  { index: 362, label: "362" },
+  { index: 374, label: "374" },
+  { index: 386, label: "386" },
+];
+const VECTOR_LANDMARKS = [
+  { from: 33, to: 263, label: "eye axis", color: "rgba(80, 230, 255, 0.95)" },
+  { from: 10, to: 152, label: "pitch axis", color: "rgba(216, 255, 55, 0.95)" },
+  { from: 61, to: 291, label: "mouth seam", color: "rgba(255, 195, 95, 0.95)" },
+  { from: 159, to: 145, label: "L EAR", color: "rgba(255, 91, 163, 0.95)" },
+  { from: 386, to: 374, label: "R EAR", color: "rgba(255, 91, 163, 0.95)" },
+];
 
 const initialMetrics: LivenessMetrics = {
   detected: false,
@@ -456,12 +505,174 @@ function resizeCanvas(canvas: HTMLCanvasElement) {
   }
 }
 
+function isDrawablePoint(point: LandmarkPoint | undefined) {
+  return Boolean(point && Number.isFinite(point.x) && Number.isFinite(point.y));
+}
+
+function drawConnections(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  landmarks: LandmarkPoint[],
+  connections: LandmarkConnection[],
+  color: string,
+  lineWidth: number,
+) {
+  if (!connections.length) return;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  for (const connection of connections) {
+    const start = landmarks[connection.start];
+    const end = landmarks[connection.end];
+    if (!isDrawablePoint(start) || !isDrawablePoint(end)) continue;
+
+    const from = mapPoint(start, video, canvas);
+    const to = mapPoint(end, video, canvas);
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function drawLandmarkDots(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  landmarks: LandmarkPoint[],
+) {
+  ctx.save();
+  ctx.fillStyle = "rgba(255, 255, 255, 0.58)";
+
+  for (const landmark of landmarks) {
+    if (!isDrawablePoint(landmark)) continue;
+    const point = mapPoint(landmark, video, canvas);
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 1.15, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawLabel(ctx: CanvasRenderingContext2D, x: number, y: number, label: string, color: string) {
+  ctx.save();
+  ctx.font = "800 10px ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+  ctx.textBaseline = "middle";
+
+  const paddingX = 4;
+  const textWidth = ctx.measureText(label).width;
+  const boxX = x + 7;
+  const boxY = y - 9;
+  const boxWidth = textWidth + paddingX * 2;
+  const boxHeight = 18;
+
+  ctx.fillStyle = "rgba(5, 6, 11, 0.82)";
+  ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+  ctx.fillStyle = color;
+  ctx.fillText(label, boxX + paddingX, y);
+  ctx.restore();
+}
+
+function drawKeyPoints(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  landmarks: LandmarkPoint[],
+) {
+  ctx.save();
+  ctx.lineWidth = 1.5;
+
+  for (const keyPoint of KEY_LANDMARKS) {
+    const landmark = landmarks[keyPoint.index];
+    if (!isDrawablePoint(landmark)) continue;
+
+    const point = mapPoint(landmark, video, canvas);
+    ctx.fillStyle = "#d8ff37";
+    ctx.strokeStyle = "rgba(5, 6, 11, 0.92)";
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    drawLabel(ctx, point.x, point.y, keyPoint.label, "#d8ff37");
+  }
+
+  ctx.restore();
+}
+
+function drawArrow(
+  ctx: CanvasRenderingContext2D,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  color: string,
+  label: string,
+) {
+  const angle = Math.atan2(to.y - from.y, to.x - from.x);
+  const headLength = 10;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = "round";
+
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(to.x, to.y);
+  ctx.lineTo(to.x - headLength * Math.cos(angle - Math.PI / 6), to.y - headLength * Math.sin(angle - Math.PI / 6));
+  ctx.lineTo(to.x - headLength * Math.cos(angle + Math.PI / 6), to.y - headLength * Math.sin(angle + Math.PI / 6));
+  ctx.closePath();
+  ctx.fill();
+
+  drawLabel(ctx, (from.x + to.x) / 2, (from.y + to.y) / 2, label, color);
+  ctx.restore();
+}
+
+function drawVectors(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  landmarks: LandmarkPoint[],
+) {
+  for (const vector of VECTOR_LANDMARKS) {
+    const fromPoint = landmarks[vector.from];
+    const toPoint = landmarks[vector.to];
+    if (!isDrawablePoint(fromPoint) || !isDrawablePoint(toPoint)) continue;
+
+    drawArrow(ctx, mapPoint(fromPoint, video, canvas), mapPoint(toPoint, video, canvas), vector.color, vector.label);
+  }
+
+  const bounds = getFaceBounds(landmarks);
+  const noseTip = landmarks[NOSE_TIP];
+  if (bounds && isDrawablePoint(noseTip)) {
+    const center = mapPoint({ x: bounds.centerX, y: bounds.centerY }, video, canvas);
+    const nose = mapPoint(noseTip, video, canvas);
+    drawArrow(ctx, center, nose, "rgba(255, 255, 255, 0.96)", "yaw offset");
+  }
+}
+
 function drawOverlay(
   canvas: HTMLCanvasElement,
   video: HTMLVideoElement,
   landmarks: LandmarkPoint[] | null,
   metrics: LivenessMetrics,
   activeStep: LivenessStepId,
+  visualLayers: VisualLayerState,
+  connectionSets: LandmarkConnectionSets,
 ) {
   resizeCanvas(canvas);
   const ctx = canvas.getContext("2d");
@@ -471,6 +682,23 @@ function drawOverlay(
 
   const cx = canvas.clientWidth / 2;
   if (!landmarks) return;
+
+  if (visualLayers.mesh) {
+    drawConnections(ctx, canvas, video, landmarks, connectionSets.mesh, "rgba(82, 214, 255, 0.26)", 0.8);
+    drawLandmarkDots(ctx, canvas, video, landmarks);
+  }
+
+  if (visualLayers.contours) {
+    drawConnections(ctx, canvas, video, landmarks, connectionSets.contours, "rgba(216, 255, 55, 0.9)", 2);
+  }
+
+  if (visualLayers.keyPoints) {
+    drawKeyPoints(ctx, canvas, video, landmarks);
+  }
+
+  if (visualLayers.vectors) {
+    drawVectors(ctx, canvas, video, landmarks);
+  }
 
   if (activeStep === "right" || activeStep === "left" || activeStep === "down" || activeStep === "up") {
     const isHorizontal = activeStep === "right" || activeStep === "left";
@@ -603,6 +831,7 @@ export function ActiveLivenessPrototype() {
   const lightingCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const landmarkerRef = useRef<FaceLandmarker | null>(null);
+  const connectionSetsRef = useRef<LandmarkConnectionSets>({ mesh: [], contours: [] });
   const rafRef = useRef<number | null>(null);
   const activeStepRef = useRef<LivenessStepId>("frontBlink");
   const challengeRef = useRef<ChallengeState>({
@@ -626,6 +855,7 @@ export function ActiveLivenessPrototype() {
   const issueCandidateRef = useRef<{ key: string; startedAt: number } | null>(null);
   const transitionTimeoutRef = useRef<number | null>(null);
   const transitioningRef = useRef(false);
+  const visualLayersRef = useRef<VisualLayerState>(initialVisualLayers);
 
   const [cameraState, setCameraState] = useState<CameraState>("idle");
   const [modelState, setModelState] = useState<ModelState>("idle");
@@ -643,6 +873,7 @@ export function ActiveLivenessPrototype() {
   const [displayIssue, setDisplayIssue] = useState("");
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [visualLayers, setVisualLayers] = useState<VisualLayerState>(initialVisualLayers);
 
   const moveToStep = (step: LivenessStepId) => {
     activeStepRef.current = step;
@@ -652,6 +883,14 @@ export function ActiveLivenessPrototype() {
   const setChallengeState = (next: ChallengeState) => {
     challengeRef.current = next;
     setChallenge(next);
+  };
+
+  const toggleVisualLayer = (layerId: VisualLayerId) => {
+    setVisualLayers((current) => {
+      const next = { ...current, [layerId]: !current[layerId] };
+      visualLayersRef.current = next;
+      return next;
+    });
   };
 
   const setVisibleIssue = (message: string) => {
@@ -782,6 +1021,10 @@ export function ActiveLivenessPrototype() {
         runningMode: "VIDEO",
         numFaces: 2,
       });
+      connectionSetsRef.current = {
+        mesh: vision.FaceLandmarker.FACE_LANDMARKS_TESSELATION,
+        contours: vision.FaceLandmarker.FACE_LANDMARKS_CONTOURS,
+      };
       landmarkerRef.current = landmarker;
       setModelState("ready");
       return landmarker;
@@ -875,7 +1118,7 @@ export function ActiveLivenessPrototype() {
         const noFaceMetrics = buildNoFaceMetrics(video);
         setMetrics(noFaceMetrics);
         updateVisibleIssue(noFaceMetrics, now);
-        drawOverlay(canvas, video, null, noFaceMetrics, currentStep);
+        drawOverlay(canvas, video, null, noFaceMetrics, currentStep, visualLayersRef.current, connectionSetsRef.current);
         rafRef.current = requestAnimationFrame(tick);
         return;
       }
@@ -883,7 +1126,7 @@ export function ActiveLivenessPrototype() {
       const nextMetrics = buildMetrics(video, landmarks, faces.length);
       setMetrics(nextMetrics);
       const currentStep = activeStepRef.current;
-      drawOverlay(canvas, video, landmarks, nextMetrics, currentStep);
+      drawOverlay(canvas, video, landmarks, nextMetrics, currentStep, visualLayersRef.current, connectionSetsRef.current);
       updateVisibleIssue(nextMetrics, now);
 
       let nextChallenge = challengeRef.current;
@@ -1320,6 +1563,20 @@ export function ActiveLivenessPrototype() {
           <video ref={videoRef} muted playsInline autoPlay />
           <canvas ref={overlayRef} className="liveness-overlay" />
           <div className="liveness-vignette" />
+          <div className="liveness-visual-controls" aria-label="랜드마크 시각화 옵션">
+            {VISUAL_LAYER_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                aria-pressed={visualLayers[option.id]}
+                className="liveness-visual-chip"
+                data-active={visualLayers[option.id] ? "true" : "false"}
+                onClick={() => toggleVisualLayer(option.id)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
           {cameraState === "running" || cameraState === "requesting" ? <div className="liveness-face-guide" aria-hidden="true" /> : null}
           {cameraState === "idle" || cameraState === "failed" ? (
             <div className="liveness-idle">

@@ -1460,6 +1460,42 @@ textarea {
   pointer-events: none;
 }
 
+.liveness-visual-controls {
+  position: absolute;
+  z-index: 9;
+  top: 12px;
+  left: 12px;
+  right: 78px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.liveness-visual-chip {
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(5, 6, 11, 0.62);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.68rem;
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+}
+
+.liveness-visual-chip[data-active="true"] {
+  border-color: #d8ff37;
+  background: #d8ff37;
+  color: #05060b;
+}
+
 .liveness-vignette {
   z-index: 3;
   pointer-events: none;
@@ -1934,6 +1970,11 @@ textarea {
     display: none;
   }
 
+  .liveness-visual-controls {
+    right: auto;
+    max-width: min(360px, calc(100% - 24px));
+  }
+
   .liveness-readout {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -1950,6 +1991,16 @@ textarea {
 
   .liveness-actions {
     padding: 18px 18px 24px;
+  }
+
+  .liveness-visual-controls {
+    right: 12px;
+  }
+
+  .liveness-visual-chip {
+    min-height: 26px;
+    padding: 0 8px;
+    font-size: 0.64rem;
   }
 
   .liveness-readout {
