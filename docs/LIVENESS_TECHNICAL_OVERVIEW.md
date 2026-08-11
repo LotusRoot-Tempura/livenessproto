@@ -747,7 +747,7 @@ Detail 모드는 개발/튜닝용이다. 실제 상용 UX에서는 숨기거나 
 | 정면 hold | `3000ms` | blink 후 정면 유지 시간 |
 | 동작 hold | `1500ms` | 좌/우/상/하 유지 시간 |
 | validation delay | `1500ms` | 오류 메시지 지연 표시 |
-| snackbar minimum visible | `1000ms` | 이미 표시된 오류 안내의 최소 읽기 시간 |
+| snackbar minimum visible | `2000ms` | 이미 표시된 오류 안내의 최소 읽기 시간 |
 | step transition | `1300ms` | 다음 스텝 전환 대기 |
 | 가림 실패 점수 cap | `68` | `occlusionClear=false`일 때 최대 점수 |
 | occlusion history | `1400ms` | 최근 프레임 기반 가림 판정 집계 구간 |

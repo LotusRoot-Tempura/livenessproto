@@ -147,7 +147,7 @@ const FRONT_HOLD_MS = 3000;
 const CHALLENGE_HOLD_MS = 1500;
 const SCORE_PASS_THRESHOLD = 82;
 const ISSUE_VISIBLE_DELAY_MS = 1500;
-const ISSUE_MIN_VISIBLE_MS = 1000;
+const ISSUE_MIN_VISIBLE_MS = 2000;
 const STEP_TRANSITION_MS = 1300;
 const OCCLUSION_SAMPLE_WIDTH = 128;
 const OCCLUSION_SAMPLE_HEIGHT = 96;
@@ -985,6 +985,7 @@ export function ActiveLivenessPrototype() {
   const displayedIssueRef = useRef("");
   const displayedIssueSinceRef = useRef<number | null>(null);
   const issueCandidateRef = useRef<{ key: string; startedAt: number } | null>(null);
+  const issueClearTimeoutRef = useRef<number | null>(null);
   const transitionTimeoutRef = useRef<number | null>(null);
   const transitioningRef = useRef(false);
   const visualLayersRef = useRef<VisualLayerState>(initialVisualLayers);
@@ -1028,8 +1029,33 @@ export function ActiveLivenessPrototype() {
     });
   };
 
+  const cancelIssueClearTimeout = () => {
+    if (issueClearTimeoutRef.current !== null) {
+      window.clearTimeout(issueClearTimeoutRef.current);
+      issueClearTimeoutRef.current = null;
+    }
+  };
+
+  const hideVisibleIssue = () => {
+    cancelIssueClearTimeout();
+    if (!displayedIssueRef.current) return;
+    displayedIssueRef.current = "";
+    displayedIssueSinceRef.current = null;
+    setDisplayIssue("");
+  };
+
   const setVisibleIssue = (message: string, now: number | null = null) => {
-    if (displayedIssueRef.current === message) return;
+    if (message) {
+      cancelIssueClearTimeout();
+    }
+
+    if (displayedIssueRef.current === message) {
+      if (message && displayedIssueSinceRef.current === null) {
+        displayedIssueSinceRef.current = now;
+      }
+      return;
+    }
+
     displayedIssueRef.current = message;
     displayedIssueSinceRef.current = message ? now : null;
     setDisplayIssue(message);
@@ -1037,8 +1063,7 @@ export function ActiveLivenessPrototype() {
 
   const clearVisibleIssue = () => {
     issueCandidateRef.current = null;
-    displayedIssueSinceRef.current = null;
-    setVisibleIssue("");
+    hideVisibleIssue();
   };
 
   const releaseVisibleIssue = (now: number, options: { clearCandidate?: boolean } = {}) => {
@@ -1049,11 +1074,18 @@ export function ActiveLivenessPrototype() {
     if (!displayedIssueRef.current) return;
 
     const displayedSince = displayedIssueSinceRef.current;
-    if (displayedSince !== null && now - displayedSince < ISSUE_MIN_VISIBLE_MS) {
+    const remainingMs = displayedSince === null ? 0 : ISSUE_MIN_VISIBLE_MS - (now - displayedSince);
+    if (remainingMs > 0) {
+      if (issueClearTimeoutRef.current === null) {
+        issueClearTimeoutRef.current = window.setTimeout(() => {
+          issueClearTimeoutRef.current = null;
+          hideVisibleIssue();
+        }, remainingMs);
+      }
       return;
     }
 
-    setVisibleIssue("");
+    hideVisibleIssue();
   };
 
   const resetTemporalOcclusion = () => {
@@ -1218,7 +1250,7 @@ export function ActiveLivenessPrototype() {
     if (transitioningRef.current) return;
     transitioningRef.current = true;
     setIsTransitioning(true);
-    clearVisibleIssue();
+    releaseVisibleIssue(performance.now());
     resetHolds();
     resetTemporalOcclusion();
 
@@ -1234,7 +1266,7 @@ export function ActiveLivenessPrototype() {
 
   const updateVisibleIssue = (nextMetrics: LivenessMetrics, now: number) => {
     if (activeStepRef.current === "complete" || transitioningRef.current) {
-      clearVisibleIssue();
+      releaseVisibleIssue(now);
       return;
     }
 
@@ -1245,6 +1277,10 @@ export function ActiveLivenessPrototype() {
     }
 
     const candidate = issueCandidateRef.current;
+    if (displayedIssueRef.current === issue.message) {
+      cancelIssueClearTimeout();
+    }
+
     if (!candidate || candidate.key !== issue.key) {
       issueCandidateRef.current = { key: issue.key, startedAt: now };
       releaseVisibleIssue(now, { clearCandidate: false });
