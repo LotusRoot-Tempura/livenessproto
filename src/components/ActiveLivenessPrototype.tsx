@@ -146,7 +146,7 @@ const EYES_CLOSED_EAR = 0.195;
 const FRONT_HOLD_MS = 3000;
 const CHALLENGE_HOLD_MS = 1500;
 const SCORE_PASS_THRESHOLD = 82;
-const ISSUE_VISIBLE_DELAY_MS = 2400;
+const ISSUE_VISIBLE_DELAY_MS = 1500;
 const STEP_TRANSITION_MS = 1300;
 const OCCLUSION_SAMPLE_WIDTH = 128;
 const OCCLUSION_SAMPLE_HEIGHT = 96;
@@ -1764,7 +1764,7 @@ export function ActiveLivenessPrototype() {
   const recoverableIssueVisible = holdProgress <= 0 && !currentStepReady && !passReady && !isTransitioning;
   const statusMessage = errorMessage || (recoverableIssueVisible ? displayIssue : "");
   const progressPercent = Math.round((passReady || isTransitioning ? 1 : holdProgress) * 100);
-  const ringState = statusMessage ? "warn" : passReady || isTransitioning ? "pass" : currentStepReady ? "ready" : "idle";
+  const ringState = statusMessage ? "warn" : passReady || isTransitioning ? "pass" : holdProgress > 0 ? "ready" : "idle";
   const actionLabel =
     cameraState === "requesting" || modelState === "loading"
       ? "시작 중"

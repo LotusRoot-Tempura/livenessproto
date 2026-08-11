@@ -1503,8 +1503,8 @@ textarea {
 }
 
 .liveness-face-guide {
-  --liveness-guide-color: #d8ff37;
-  --liveness-guide-glow: rgba(216, 255, 55, 0.28);
+  --liveness-guide-color: #ffffff;
+  --liveness-guide-glow: rgba(255, 255, 255, 0.22);
   position: absolute;
   z-index: 5;
   left: 50%;

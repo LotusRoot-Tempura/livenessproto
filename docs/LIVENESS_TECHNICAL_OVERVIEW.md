@@ -561,7 +561,7 @@ qualityReady = score >= 82 && occlusionClear
 기본 화면:
 
 - 카메라 프리뷰
-- 원형 라임 얼굴 가이드
+- 원형 얼굴 가이드: 기본은 흰색, 현재 스텝의 hold/progress가 진행될 때 라임색, 오류가 지속될 때 빨간색
 - 가이드 바깥 `#000000`, alpha `0.3` 딤드
 - 카메라 좌상단 landmark 시각화 칩
 - 현재 행동 안내 문구
@@ -746,7 +746,7 @@ Detail 모드는 개발/튜닝용이다. 실제 상용 UX에서는 숨기거나 
 | 눈 감김 EAR | `0.195` | 눈이 감긴 상태 |
 | 정면 hold | `3000ms` | blink 후 정면 유지 시간 |
 | 동작 hold | `1500ms` | 좌/우/상/하 유지 시간 |
-| validation delay | `2400ms` | 오류 메시지 지연 표시 |
+| validation delay | `1500ms` | 오류 메시지 지연 표시 |
 | step transition | `1300ms` | 다음 스텝 전환 대기 |
 | 가림 실패 점수 cap | `68` | `occlusionClear=false`일 때 최대 점수 |
 | occlusion history | `1400ms` | 최근 프레임 기반 가림 판정 집계 구간 |
