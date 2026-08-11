@@ -33,6 +33,12 @@ type LivenessMetrics = {
   properSize: boolean;
   lightingGood: boolean;
   occlusionClear: boolean;
+  occlusionRawClear: boolean;
+  occlusionScore: number;
+  landmarkJitter: number;
+  eyeJitter: number;
+  noseJitter: number;
+  mouthJitter: number;
   yawRatio: number;
   pitchRatio: number;
   faceWidth: number;
@@ -84,6 +90,22 @@ type LandmarkConnectionSets = {
   mesh: LandmarkConnection[];
   contours: LandmarkConnection[];
 };
+type NormalizedLandmarkSnapshot = Map<number, LandmarkPoint>;
+type LandmarkJitterSignal = {
+  global: number;
+  eyes: number;
+  nose: number;
+  mouth: number;
+  score: number;
+  severe: boolean;
+  snapshot: NormalizedLandmarkSnapshot;
+};
+type OcclusionHistoryFrame = {
+  at: number;
+  score: number;
+  rawClear: boolean;
+  severeJitter: boolean;
+};
 
 const FACE_OVAL = [
   10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176,
@@ -121,6 +143,11 @@ const ISSUE_VISIBLE_DELAY_MS = 1500;
 const STEP_TRANSITION_MS = 1300;
 const OCCLUSION_SAMPLE_WIDTH = 128;
 const OCCLUSION_SAMPLE_HEIGHT = 96;
+const OCCLUSION_HISTORY_MS = 1400;
+const OCCLUSION_DROPOUT_GRACE_MS = 480;
+const OCCLUSION_MIN_HISTORY_MS = 360;
+const OCCLUSION_PASS_SCORE = 0.74;
+const OCCLUSION_PASS_RATIO = 0.62;
 const initialVisualLayers: VisualLayerState = {
   mesh: false,
   contours: false,
@@ -160,6 +187,8 @@ const VECTOR_LANDMARKS = [
   { from: 159, to: 145, label: "L EAR", color: "rgba(255, 91, 163, 0.95)" },
   { from: 386, to: 374, label: "R EAR", color: "rgba(255, 91, 163, 0.95)" },
 ];
+const JITTER_REFERENCE = Array.from(new Set([...FACE_OVAL, 33, 263, 1, 10, 152, 168]));
+const JITTER_SNAPSHOT_INDICES = Array.from(new Set([...JITTER_REFERENCE, ...LEFT_EYE_DENSE, ...RIGHT_EYE_DENSE, ...NOSE_DENSE, ...MOUTH_DENSE]));
 
 const initialMetrics: LivenessMetrics = {
   detected: false,
@@ -168,6 +197,12 @@ const initialMetrics: LivenessMetrics = {
   properSize: false,
   lightingGood: false,
   occlusionClear: false,
+  occlusionRawClear: false,
+  occlusionScore: 0,
+  landmarkJitter: 0,
+  eyeJitter: 0,
+  noseJitter: 0,
+  mouthJitter: 0,
   yawRatio: 0,
   pitchRatio: 0,
   faceWidth: 0,
@@ -222,6 +257,76 @@ function scoreRange(value: number, min: number, max: number, softMargin: number)
   if (value >= min && value <= max) return 1;
   if (value < min) return clamp01(1 - (min - value) / softMargin);
   return clamp01(1 - (value - max) / softMargin);
+}
+
+function average(values: number[]) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function lowerBoundScore(value: number, min: number, softMargin: number) {
+  return clamp01((value - (min - softMargin)) / softMargin);
+}
+
+function makeNormalizedSnapshot(landmarks: LandmarkPoint[], bounds: Bounds) {
+  const snapshot: NormalizedLandmarkSnapshot = new Map();
+
+  for (const index of JITTER_SNAPSHOT_INDICES) {
+    const landmark = landmarks[index];
+    if (!landmark || !Number.isFinite(landmark.x) || !Number.isFinite(landmark.y)) continue;
+
+    snapshot.set(index, {
+      x: (landmark.x - bounds.centerX) / Math.max(0.0001, bounds.width),
+      y: (landmark.y - bounds.centerY) / Math.max(0.0001, bounds.height),
+    });
+  }
+
+  return snapshot;
+}
+
+function getSnapshotJitter(previous: NormalizedLandmarkSnapshot | null, current: NormalizedLandmarkSnapshot, indices: number[]) {
+  if (!previous) return 0;
+
+  let total = 0;
+  let count = 0;
+
+  for (const index of indices) {
+    const previousPoint = previous.get(index);
+    const currentPoint = current.get(index);
+    if (!previousPoint || !currentPoint) continue;
+    total += distance(previousPoint, currentPoint);
+    count += 1;
+  }
+
+  return count > 0 ? total / count : 0;
+}
+
+function getLandmarkJitterSignal(
+  previous: NormalizedLandmarkSnapshot | null,
+  landmarks: LandmarkPoint[],
+  bounds: Bounds,
+): LandmarkJitterSignal {
+  const snapshot = makeNormalizedSnapshot(landmarks, bounds);
+  const global = getSnapshotJitter(previous, snapshot, JITTER_REFERENCE);
+  const leftEye = getSnapshotJitter(previous, snapshot, LEFT_EYE_DENSE);
+  const rightEye = getSnapshotJitter(previous, snapshot, RIGHT_EYE_DENSE);
+  const eyes = Math.max(leftEye, rightEye);
+  const nose = getSnapshotJitter(previous, snapshot, NOSE_DENSE);
+  const mouth = getSnapshotJitter(previous, snapshot, MOUTH_DENSE);
+  const stableBaseline = Math.max(0.0045, global * 1.55);
+  const excess = Math.max(0, eyes - stableBaseline, nose - stableBaseline, mouth - stableBaseline);
+  const score = 1 - clamp01(excess / 0.022);
+  const severe = excess > 0.018 && Math.max(eyes, nose, mouth) > Math.max(0.016, global * 2.1);
+
+  return {
+    global,
+    eyes,
+    nose,
+    mouth,
+    score,
+    severe,
+    snapshot,
+  };
 }
 
 function getFaceBounds(landmarks: LandmarkPoint[]): Bounds | null {
@@ -856,6 +961,9 @@ export function ActiveLivenessPrototype() {
   const transitionTimeoutRef = useRef<number | null>(null);
   const transitioningRef = useRef(false);
   const visualLayersRef = useRef<VisualLayerState>(initialVisualLayers);
+  const landmarkSnapshotRef = useRef<NormalizedLandmarkSnapshot | null>(null);
+  const occlusionHistoryRef = useRef<OcclusionHistoryFrame[]>([]);
+  const lastOcclusionClearAtRef = useRef<number | null>(null);
 
   const [cameraState, setCameraState] = useState<CameraState>("idle");
   const [modelState, setModelState] = useState<ModelState>("idle");
@@ -904,6 +1012,70 @@ export function ActiveLivenessPrototype() {
     setVisibleIssue("");
   };
 
+  const resetTemporalOcclusion = () => {
+    landmarkSnapshotRef.current = null;
+    occlusionHistoryRef.current = [];
+    lastOcclusionClearAtRef.current = null;
+  };
+
+  const updateTemporalOcclusion = (
+    now: number,
+    rawClear: boolean,
+    frameScore: number,
+    jitterSignal: LandmarkJitterSignal,
+  ) => {
+    const history = [
+      ...occlusionHistoryRef.current.filter((frame) => now - frame.at <= OCCLUSION_HISTORY_MS),
+      {
+        at: now,
+        score: frameScore,
+        rawClear,
+        severeJitter: jitterSignal.severe,
+      },
+    ];
+    occlusionHistoryRef.current = history;
+
+    const firstAt = history[0]?.at ?? now;
+    const historyMs = now - firstAt;
+    const averageScore = average(history.map((frame) => frame.score));
+    const passRatio = history.filter((frame) => frame.rawClear || frame.score >= OCCLUSION_PASS_SCORE).length / Math.max(1, history.length);
+    const severeRatio = history.filter((frame) => frame.severeJitter).length / Math.max(1, history.length);
+    const enoughHistory = historyMs >= OCCLUSION_MIN_HISTORY_MS;
+    const immediateClear = rawClear && !jitterSignal.severe;
+    const stableClear =
+      enoughHistory &&
+      averageScore >= OCCLUSION_PASS_SCORE &&
+      passRatio >= OCCLUSION_PASS_RATIO &&
+      severeRatio < 0.34;
+    const warmingUpClear = !enoughHistory && frameScore >= OCCLUSION_PASS_SCORE && severeRatio < 0.34;
+
+    if (immediateClear || stableClear || warmingUpClear) {
+      lastOcclusionClearAtRef.current = now;
+      return {
+        clear: true,
+        score: clamp01(averageScore * 0.82 + passRatio * 0.18),
+      };
+    }
+
+    const lastClearAt = lastOcclusionClearAtRef.current;
+    if (
+      lastClearAt !== null &&
+      now - lastClearAt <= OCCLUSION_DROPOUT_GRACE_MS &&
+      averageScore >= 0.58 &&
+      severeRatio < 0.46
+    ) {
+      return {
+        clear: true,
+        score: clamp01(averageScore * 0.82 + passRatio * 0.18),
+      };
+    }
+
+    return {
+      clear: false,
+      score: clamp01(averageScore * 0.82 + passRatio * 0.18),
+    };
+  };
+
   const stopLoop = () => {
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
@@ -915,6 +1087,7 @@ export function ActiveLivenessPrototype() {
     stopLoop();
     clearStepTransition();
     clearVisibleIssue();
+    resetTemporalOcclusion();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (videoRef.current) {
@@ -948,12 +1121,14 @@ export function ActiveLivenessPrototype() {
     setIsTransitioning(true);
     clearVisibleIssue();
     resetHolds();
+    resetTemporalOcclusion();
 
     transitionTimeoutRef.current = window.setTimeout(() => {
       transitionTimeoutRef.current = null;
       transitioningRef.current = false;
       setIsTransitioning(false);
       resetHolds();
+      resetTemporalOcclusion();
       moveToStep(nextStep);
     }, STEP_TRANSITION_MS);
   };
@@ -985,6 +1160,7 @@ export function ActiveLivenessPrototype() {
   const resetSession = () => {
     clearStepTransition();
     clearVisibleIssue();
+    resetTemporalOcclusion();
     resetHolds();
     blinkPhaseRef.current = "waitingOpen";
     baselinePitchRef.current = null;
@@ -1115,6 +1291,7 @@ export function ActiveLivenessPrototype() {
         if (currentStep === "frontBlink") {
           blinkPhaseRef.current = "waitingOpen";
         }
+        resetTemporalOcclusion();
         const noFaceMetrics = buildNoFaceMetrics(video);
         setMetrics(noFaceMetrics);
         updateVisibleIssue(noFaceMetrics, now);
@@ -1123,7 +1300,7 @@ export function ActiveLivenessPrototype() {
         return;
       }
 
-      const nextMetrics = buildMetrics(video, landmarks, faces.length);
+      const nextMetrics = buildMetrics(video, landmarks, faces.length, now);
       setMetrics(nextMetrics);
       const currentStep = activeStepRef.current;
       drawOverlay(canvas, video, landmarks, nextMetrics, currentStep, visualLayersRef.current, connectionSetsRef.current);
@@ -1224,7 +1401,7 @@ export function ActiveLivenessPrototype() {
     rafRef.current = requestAnimationFrame(tick);
   };
 
-  function buildMetrics(video: HTMLVideoElement, landmarks: LandmarkPoint[], faceCount: number): LivenessMetrics {
+  function buildMetrics(video: HTMLVideoElement, landmarks: LandmarkPoint[], faceCount: number, now: number): LivenessMetrics {
     const bounds = getFaceBounds(landmarks);
     const leftEyeOuter = landmarks[LEFT_EYE_OUTER];
     const leftEyeInner = landmarks[LEFT_EYE_INNER];
@@ -1270,6 +1447,7 @@ export function ActiveLivenessPrototype() {
       !noseDense ||
       !mouthDense
     ) {
+      resetTemporalOcclusion();
       return initialMetrics;
     }
 
@@ -1309,6 +1487,51 @@ export function ActiveLivenessPrototype() {
     const mouthDenseWidthRatio = (mouthDenseBounds.maxX - mouthDenseBounds.minX) / Math.max(0.0001, bounds.width);
     const mouthDenseHeightRatio = (mouthDenseBounds.maxY - mouthDenseBounds.minY) / Math.max(0.0001, bounds.height);
     const lipGapRatio = distance(upperLip, lowerLip) / Math.max(0.0001, bounds.height);
+    const eyesShapeScore = average([
+      lowerBoundScore(leftEyeWidthRatio, 0.11, 0.045),
+      lowerBoundScore(rightEyeWidthRatio, 0.11, 0.045),
+      scoreRange(eyeWidthRatio, 1, 2.45, 0.8),
+      lowerBoundScore(averageEar, 0.07, 0.055),
+      lowerBoundScore(leftEyeAreaRatio, 0.00055, 0.00045),
+      lowerBoundScore(rightEyeAreaRatio, 0.00055, 0.00045),
+    ]);
+    const noseShapeScore = average([
+      scoreRange(noseWidthRatio, 0.07, 0.36, 0.06),
+      scoreRange(noseBridgeRatio, 0.07, 0.38, 0.08),
+      lowerBoundScore(noseTip.y - (eyeCenterY + bounds.height * 0.05), 0, bounds.height * 0.06),
+      lowerBoundScore(mouthCenterY - bounds.height * 0.035 - noseTip.y, 0, bounds.height * 0.06),
+      lowerBoundScore(getBoundsArea(noseDense) / faceArea, 0.008, 0.006),
+    ]);
+    const mouthShapeScore = average([
+      scoreRange(mouthWidthRatio, 0.13, 0.62, 0.08),
+      lowerBoundScore(mouthDenseWidthRatio, 0.15, 0.06),
+      lowerBoundScore(mouthDenseHeightRatio, 0.025, 0.02),
+      scoreRange(lipGapRatio, 0, 0.18, 0.07),
+      lowerBoundScore(mouthCenterY - (noseTip.y + bounds.height * 0.065), 0, bounds.height * 0.06),
+      lowerBoundScore(getBoundsArea(mouthDense) / faceArea, 0.006, 0.004),
+    ]);
+    const mouthSeamScore = average([
+      lowerBoundScore(mouthLineSignal.seamDarkness, 3.2, 2.4),
+      lowerBoundScore(mouthSignal.brightness - 1.4 - mouthLineSignal.lineBrightness, 0, 8),
+      scoreRange(mouthLineSignal.lineBrightness, 18, 220, 34),
+      Math.max(lowerBoundScore(mouthLineSignal.lineEdge, 1.2, 1.1), lowerBoundScore(mouthLineSignal.lineContrast, 2.8, 2.1)),
+    ]);
+    const eyesTextureScore = average([
+      scoreRange(leftEyeSignal.brightness, 24, 236, 34),
+      scoreRange(rightEyeSignal.brightness, 24, 236, 34),
+      lowerBoundScore((leftEyeSignal.contrast + rightEyeSignal.contrast) / 2, 7.2, 5.2),
+      lowerBoundScore((leftEyeSignal.edge + rightEyeSignal.edge) / 2, 2.6, 2.0),
+    ]);
+    const noseTextureScore = average([
+      scoreRange(noseSignal.brightness, 24, 236, 34),
+      Math.max(lowerBoundScore(noseSignal.contrast, 4.2, 3.0), lowerBoundScore(noseSignal.edge, 1.8, 1.4)),
+    ]);
+    const mouthTextureScore = average([
+      scoreRange(mouthSignal.brightness, 24, 236, 34),
+      lowerBoundScore(mouthSignal.contrast, 5.0, 3.6),
+      lowerBoundScore(mouthSignal.edge, 2.0, 1.5),
+      mouthSeamScore,
+    ]);
     const eyesShapeClear =
       leftEyeWidthRatio > 0.11 &&
       rightEyeWidthRatio > 0.11 &&
@@ -1355,8 +1578,23 @@ export function ActiveLivenessPrototype() {
       mouthSignal.contrast >= 5.0 &&
       mouthSignal.edge >= 2.0 &&
       mouthSeamClear;
-    const occlusionClear =
+    const rawOcclusionClear =
       eyesShapeClear && noseShapeClear && mouthShapeClear && eyesTextureClear && noseTextureClear && mouthTextureClear;
+    const jitterSignal = getLandmarkJitterSignal(landmarkSnapshotRef.current, landmarks, bounds);
+    landmarkSnapshotRef.current = jitterSignal.snapshot;
+    const componentOcclusionScore = average([
+      eyesShapeScore,
+      noseShapeScore,
+      mouthShapeScore,
+      eyesTextureScore,
+      noseTextureScore,
+      mouthTextureScore,
+    ]);
+    const frameOcclusionScore = rawOcclusionClear
+      ? Math.max(0.9, componentOcclusionScore * 0.78 + jitterSignal.score * 0.22)
+      : componentOcclusionScore * 0.78 + jitterSignal.score * 0.22;
+    const temporalOcclusion = updateTemporalOcclusion(now, rawOcclusionClear, frameOcclusionScore, jitterSignal);
+    const occlusionClear = temporalOcclusion.clear;
 
     const scoreParts = [
       1,
@@ -1376,6 +1614,12 @@ export function ActiveLivenessPrototype() {
       properSize,
       lightingGood: lighting.good,
       occlusionClear,
+      occlusionRawClear: rawOcclusionClear,
+      occlusionScore: temporalOcclusion.score,
+      landmarkJitter: jitterSignal.global,
+      eyeJitter: jitterSignal.eyes,
+      noseJitter: jitterSignal.nose,
+      mouthJitter: jitterSignal.mouth,
       yawRatio,
       pitchRatio,
       faceWidth: bounds.width,
@@ -1448,7 +1692,7 @@ export function ActiveLivenessPrototype() {
     ["중앙", metrics.centered, (scoreRange(metrics.faceWidth ? 0.5 + (metrics.yawRatio * metrics.faceWidth) : 0.5, 0.42, 0.58, 0.2) + (metrics.centered ? 1 : 0)) / 2],
     ["거리", metrics.properSize, (scoreRange(metrics.faceWidth, 0.28, 0.58, 0.12) + scoreRange(metrics.faceHeight, 0.38, 0.78, 0.16)) / 2],
     ["조명", metrics.lightingGood, (scoreRange(metrics.brightness, 62, 208, 42) + scoreRange(metrics.contrast, 18, 96, 18)) / 2],
-    ["가림", metrics.occlusionClear, metrics.occlusionClear ? 1 : 0],
+    ["가림", metrics.occlusionClear, metrics.occlusionScore],
   ] as const;
 
   const renderDetailPanel = () => (
@@ -1512,6 +1756,22 @@ export function ActiveLivenessPrototype() {
         <div>
           <span>light</span>
           <strong>{Math.round(metrics.brightness)}</strong>
+        </div>
+        <div>
+          <span>occ</span>
+          <strong>{Math.round(metrics.occlusionScore * 100)}%</strong>
+        </div>
+        <div>
+          <span>raw</span>
+          <strong>{metrics.occlusionRawClear ? "OK" : "NO"}</strong>
+        </div>
+        <div>
+          <span>jitter</span>
+          <strong>{formatNumber(metrics.landmarkJitter, 4)}</strong>
+        </div>
+        <div>
+          <span>mouth jit</span>
+          <strong>{formatNumber(metrics.mouthJitter, 4)}</strong>
         </div>
       </div>
 
