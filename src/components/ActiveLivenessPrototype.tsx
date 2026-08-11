@@ -39,6 +39,10 @@ type LivenessMetrics = {
   eyeJitter: number;
   noseJitter: number;
   mouthJitter: number;
+  jitterSpikeRatio: number;
+  jitterSpikeCount: number;
+  mouthJitterSpikeRatio: number;
+  mouthJitterSpikeCount: number;
   yawRatio: number;
   pitchRatio: number;
   faceWidth: number;
@@ -105,6 +109,9 @@ type OcclusionHistoryFrame = {
   score: number;
   rawClear: boolean;
   severeJitter: boolean;
+  jitterSpike: boolean;
+  mouthJitterSpike: boolean;
+  hardJitterSpike: boolean;
 };
 
 const FACE_OVAL = [
@@ -148,6 +155,8 @@ const OCCLUSION_DROPOUT_GRACE_MS = 480;
 const OCCLUSION_MIN_HISTORY_MS = 360;
 const OCCLUSION_PASS_SCORE = 0.74;
 const OCCLUSION_PASS_RATIO = 0.62;
+const LANDMARK_JITTER_SPIKE_THRESHOLD = 0.01;
+const LANDMARK_JITTER_HARD_SPIKE_THRESHOLD = 0.02;
 const initialVisualLayers: VisualLayerState = {
   mesh: false,
   contours: false,
@@ -203,6 +212,10 @@ const initialMetrics: LivenessMetrics = {
   eyeJitter: 0,
   noseJitter: 0,
   mouthJitter: 0,
+  jitterSpikeRatio: 0,
+  jitterSpikeCount: 0,
+  mouthJitterSpikeRatio: 0,
+  mouthJitterSpikeCount: 0,
   yawRatio: 0,
   pitchRatio: 0,
   faceWidth: 0,
@@ -1024,6 +1037,15 @@ export function ActiveLivenessPrototype() {
     frameScore: number,
     jitterSignal: LandmarkJitterSignal,
   ) => {
+    const jitterSpike =
+      jitterSignal.global > LANDMARK_JITTER_SPIKE_THRESHOLD ||
+      jitterSignal.mouth > LANDMARK_JITTER_SPIKE_THRESHOLD;
+    const mouthJitterSpike = jitterSignal.mouth > LANDMARK_JITTER_SPIKE_THRESHOLD;
+    const hardJitterSpike =
+      jitterSignal.global > LANDMARK_JITTER_HARD_SPIKE_THRESHOLD ||
+      jitterSignal.mouth > LANDMARK_JITTER_HARD_SPIKE_THRESHOLD ||
+      jitterSignal.eyes > LANDMARK_JITTER_HARD_SPIKE_THRESHOLD ||
+      jitterSignal.nose > LANDMARK_JITTER_HARD_SPIKE_THRESHOLD;
     const history = [
       ...occlusionHistoryRef.current.filter((frame) => now - frame.at <= OCCLUSION_HISTORY_MS),
       {
@@ -1031,6 +1053,9 @@ export function ActiveLivenessPrototype() {
         score: frameScore,
         rawClear,
         severeJitter: jitterSignal.severe,
+        jitterSpike,
+        mouthJitterSpike,
+        hardJitterSpike,
       },
     ];
     occlusionHistoryRef.current = history;
@@ -1040,20 +1065,53 @@ export function ActiveLivenessPrototype() {
     const averageScore = average(history.map((frame) => frame.score));
     const passRatio = history.filter((frame) => frame.rawClear || frame.score >= OCCLUSION_PASS_SCORE).length / Math.max(1, history.length);
     const severeRatio = history.filter((frame) => frame.severeJitter).length / Math.max(1, history.length);
+    const jitterSpikeCount = history.filter((frame) => frame.jitterSpike).length;
+    const mouthJitterSpikeCount = history.filter((frame) => frame.mouthJitterSpike).length;
+    const hardJitterSpikeCount = history.filter((frame) => frame.hardJitterSpike).length;
+    const jitterSpikeRatio = jitterSpikeCount / Math.max(1, history.length);
+    const mouthJitterSpikeRatio = mouthJitterSpikeCount / Math.max(1, history.length);
+    const hardJitterSpikeRatio = hardJitterSpikeCount / Math.max(1, history.length);
     const enoughHistory = historyMs >= OCCLUSION_MIN_HISTORY_MS;
-    const immediateClear = rawClear && !jitterSignal.severe;
+    const spikePressure = Math.max(
+      clamp01((jitterSpikeRatio - 0.12) / 0.36),
+      clamp01((mouthJitterSpikeRatio - 0.1) / 0.34),
+      clamp01(hardJitterSpikeRatio / 0.12),
+    );
+    const sustainedJitter =
+      enoughHistory &&
+      ((jitterSpikeCount >= 6 && jitterSpikeRatio >= 0.18) ||
+        (mouthJitterSpikeCount >= 5 && mouthJitterSpikeRatio >= 0.14) ||
+        hardJitterSpikeCount >= 2);
+    const temporalScore = clamp01(averageScore * 0.72 + passRatio * 0.18 + (1 - spikePressure) * 0.1 - spikePressure * 0.58);
+    const immediateClear = rawClear && !jitterSignal.severe && !jitterSpike;
     const stableClear =
       enoughHistory &&
+      !sustainedJitter &&
       averageScore >= OCCLUSION_PASS_SCORE &&
       passRatio >= OCCLUSION_PASS_RATIO &&
       severeRatio < 0.34;
-    const warmingUpClear = !enoughHistory && frameScore >= OCCLUSION_PASS_SCORE && severeRatio < 0.34;
+    const warmingUpClear = !enoughHistory && frameScore >= OCCLUSION_PASS_SCORE && severeRatio < 0.34 && hardJitterSpikeCount === 0;
+
+    if (sustainedJitter) {
+      return {
+        clear: false,
+        score: temporalScore,
+        jitterSpikeRatio,
+        jitterSpikeCount,
+        mouthJitterSpikeRatio,
+        mouthJitterSpikeCount,
+      };
+    }
 
     if (immediateClear || stableClear || warmingUpClear) {
       lastOcclusionClearAtRef.current = now;
       return {
         clear: true,
-        score: clamp01(averageScore * 0.82 + passRatio * 0.18),
+        score: temporalScore,
+        jitterSpikeRatio,
+        jitterSpikeCount,
+        mouthJitterSpikeRatio,
+        mouthJitterSpikeCount,
       };
     }
 
@@ -1062,17 +1120,27 @@ export function ActiveLivenessPrototype() {
       lastClearAt !== null &&
       now - lastClearAt <= OCCLUSION_DROPOUT_GRACE_MS &&
       averageScore >= 0.58 &&
-      severeRatio < 0.46
+      severeRatio < 0.46 &&
+      jitterSpikeRatio < 0.32 &&
+      hardJitterSpikeRatio < 0.12
     ) {
       return {
         clear: true,
-        score: clamp01(averageScore * 0.82 + passRatio * 0.18),
+        score: temporalScore,
+        jitterSpikeRatio,
+        jitterSpikeCount,
+        mouthJitterSpikeRatio,
+        mouthJitterSpikeCount,
       };
     }
 
     return {
       clear: false,
-      score: clamp01(averageScore * 0.82 + passRatio * 0.18),
+      score: temporalScore,
+      jitterSpikeRatio,
+      jitterSpikeCount,
+      mouthJitterSpikeRatio,
+      mouthJitterSpikeCount,
     };
   };
 
@@ -1590,9 +1658,16 @@ export function ActiveLivenessPrototype() {
       noseTextureScore,
       mouthTextureScore,
     ]);
+    const currentJitterSpikePenalty = clamp01(
+      (Math.max(jitterSignal.global, jitterSignal.mouth, jitterSignal.eyes, jitterSignal.nose) - LANDMARK_JITTER_SPIKE_THRESHOLD) /
+        (LANDMARK_JITTER_HARD_SPIKE_THRESHOLD - LANDMARK_JITTER_SPIKE_THRESHOLD),
+    );
+    const weightedFrameOcclusionScore = clamp01(
+      componentOcclusionScore * 0.68 + jitterSignal.score * 0.14 + (1 - currentJitterSpikePenalty) * 0.18,
+    );
     const frameOcclusionScore = rawOcclusionClear
-      ? Math.max(0.9, componentOcclusionScore * 0.78 + jitterSignal.score * 0.22)
-      : componentOcclusionScore * 0.78 + jitterSignal.score * 0.22;
+      ? Math.max(0.78, weightedFrameOcclusionScore - currentJitterSpikePenalty * 0.18)
+      : Math.max(0, weightedFrameOcclusionScore - currentJitterSpikePenalty * 0.28);
     const temporalOcclusion = updateTemporalOcclusion(now, rawOcclusionClear, frameOcclusionScore, jitterSignal);
     const occlusionClear = temporalOcclusion.clear;
 
@@ -1620,6 +1695,10 @@ export function ActiveLivenessPrototype() {
       eyeJitter: jitterSignal.eyes,
       noseJitter: jitterSignal.nose,
       mouthJitter: jitterSignal.mouth,
+      jitterSpikeRatio: temporalOcclusion.jitterSpikeRatio,
+      jitterSpikeCount: temporalOcclusion.jitterSpikeCount,
+      mouthJitterSpikeRatio: temporalOcclusion.mouthJitterSpikeRatio,
+      mouthJitterSpikeCount: temporalOcclusion.mouthJitterSpikeCount,
       yawRatio,
       pitchRatio,
       faceWidth: bounds.width,
@@ -1772,6 +1851,22 @@ export function ActiveLivenessPrototype() {
         <div>
           <span>mouth jit</span>
           <strong>{formatNumber(metrics.mouthJitter, 4)}</strong>
+        </div>
+        <div>
+          <span>jit hits</span>
+          <strong>{metrics.jitterSpikeCount}</strong>
+        </div>
+        <div>
+          <span>mouth hits</span>
+          <strong>{metrics.mouthJitterSpikeCount}</strong>
+        </div>
+        <div>
+          <span>jit rate</span>
+          <strong>{Math.round(metrics.jitterSpikeRatio * 100)}%</strong>
+        </div>
+        <div>
+          <span>mouth rate</span>
+          <strong>{Math.round(metrics.mouthJitterSpikeRatio * 100)}%</strong>
         </div>
       </div>
 
