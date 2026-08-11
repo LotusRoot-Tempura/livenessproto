@@ -1499,32 +1499,34 @@ textarea {
 .liveness-vignette {
   z-index: 3;
   pointer-events: none;
-  background: linear-gradient(to bottom, rgba(5, 6, 11, 0.18), transparent 30%, transparent 60%, rgba(5, 6, 11, 0.56));
+  background: transparent;
 }
 
 .liveness-face-guide {
+  --liveness-guide-color: #d8ff37;
+  --liveness-guide-glow: rgba(216, 255, 55, 0.28);
   position: absolute;
   z-index: 5;
   left: 50%;
-  top: 40%;
-  width: min(68%, 252px);
-  aspect-ratio: 0.72 / 1;
+  top: 42%;
+  width: min(78%, 312px);
+  aspect-ratio: 1;
   transform: translate(-50%, -50%);
-  border: 5px solid #ffffff;
-  border-radius: 50%;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.14), 0 0 24px rgba(0, 0, 0, 0.12);
+  border: 5px solid var(--liveness-guide-color);
+  border-radius: 999px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.14), 0 0 26px var(--liveness-guide-glow);
   transition: border-color 260ms ease, box-shadow 260ms ease, transform 260ms ease;
 }
 
 .liveness-camera[data-ring="ready"] .liveness-face-guide,
 .liveness-camera[data-ring="pass"] .liveness-face-guide {
-  border-color: #d8ff37;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.14), 0 0 24px rgba(216, 255, 55, 0.32);
+  --liveness-guide-color: #d8ff37;
+  --liveness-guide-glow: rgba(216, 255, 55, 0.32);
 }
 
 .liveness-camera[data-ring="warn"] .liveness-face-guide {
-  border-color: #ff5252;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.14), 0 0 24px rgba(255, 82, 82, 0.28);
+  --liveness-guide-color: #ff5252;
+  --liveness-guide-glow: rgba(255, 82, 82, 0.28);
 }
 
 .liveness-idle {

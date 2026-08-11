@@ -146,7 +146,7 @@ const EYES_CLOSED_EAR = 0.195;
 const FRONT_HOLD_MS = 3000;
 const CHALLENGE_HOLD_MS = 1500;
 const SCORE_PASS_THRESHOLD = 82;
-const ISSUE_VISIBLE_DELAY_MS = 1500;
+const ISSUE_VISIBLE_DELAY_MS = 2400;
 const STEP_TRANSITION_MS = 1300;
 const OCCLUSION_SAMPLE_WIDTH = 128;
 const OCCLUSION_SAMPLE_HEIGHT = 96;
@@ -157,6 +157,18 @@ const OCCLUSION_PASS_SCORE = 0.74;
 const OCCLUSION_PASS_RATIO = 0.62;
 const LANDMARK_JITTER_SPIKE_THRESHOLD = 0.01;
 const LANDMARK_JITTER_HARD_SPIKE_THRESHOLD = 0.02;
+const FACE_CENTER_X_TARGET = 0.5;
+const FACE_CENTER_Y_TARGET = 0.51;
+const FACE_CENTER_X_TOLERANCE = 0.16;
+const FACE_CENTER_Y_TOLERANCE = 0.2;
+const FACE_WIDTH_MIN = 0.2;
+const FACE_WIDTH_MAX = 0.68;
+const FACE_HEIGHT_MIN = 0.28;
+const FACE_HEIGHT_MAX = 0.88;
+const FACE_SCORE_WIDTH_MIN = 0.24;
+const FACE_SCORE_WIDTH_MAX = 0.62;
+const FACE_SCORE_HEIGHT_MIN = 0.32;
+const FACE_SCORE_HEIGHT_MAX = 0.84;
 const initialVisualLayers: VisualLayerState = {
   mesh: false,
   contours: false,
@@ -888,7 +900,7 @@ function getQualityIssue(metrics: LivenessMetrics): QualityIssue | null {
   }
 
   if (!metrics.properSize) {
-    if (metrics.faceWidth < 0.24 || metrics.faceHeight < 0.32) {
+    if (metrics.faceWidth < FACE_WIDTH_MIN || metrics.faceHeight < FACE_HEIGHT_MIN) {
       return {
         key: "face-too-small",
         message: "얼굴이 너무 작게 보입니다. 카메라에 조금 더 가까이 다가와 주세요.",
@@ -1541,8 +1553,14 @@ export function ActiveLivenessPrototype() {
     const noseSignal = getRegionSignal(pixelFrame, noseDense, 0.028, 0.035);
     const mouthSignal = getRegionSignal(pixelFrame, mouthDense, 0.035, 0.03);
     const mouthLineSignal = getMouthLineSignal(pixelFrame, mouthLeft, mouthRight, upperLip, lowerLip, bounds.height);
-    const centered = Math.abs(bounds.centerX - 0.5) < 0.12 && Math.abs(bounds.centerY - 0.51) < 0.15;
-    const properSize = bounds.width > 0.24 && bounds.width < 0.62 && bounds.height > 0.32 && bounds.height < 0.82;
+    const centered =
+      Math.abs(bounds.centerX - FACE_CENTER_X_TARGET) < FACE_CENTER_X_TOLERANCE &&
+      Math.abs(bounds.centerY - FACE_CENTER_Y_TARGET) < FACE_CENTER_Y_TOLERANCE;
+    const properSize =
+      bounds.width > FACE_WIDTH_MIN &&
+      bounds.width < FACE_WIDTH_MAX &&
+      bounds.height > FACE_HEIGHT_MIN &&
+      bounds.height < FACE_HEIGHT_MAX;
     const singleFace = faceCount === 1;
     const faceArea = Math.max(0.0001, bounds.width * bounds.height);
     const leftEyeWidthRatio = distance(leftEyeOuter, leftEyeInner) / Math.max(0.0001, bounds.width);
@@ -1674,8 +1692,10 @@ export function ActiveLivenessPrototype() {
     const scoreParts = [
       1,
       singleFace ? 1 : 0,
-      (scoreRange(bounds.centerX, 0.45, 0.55, 0.16) + scoreRange(bounds.centerY, 0.43, 0.6, 0.18)) / 2,
-      (scoreRange(bounds.width, 0.28, 0.58, 0.12) + scoreRange(bounds.height, 0.38, 0.78, 0.16)) / 2,
+      (scoreRange(bounds.centerX, 0.42, 0.58, 0.2) + scoreRange(bounds.centerY, 0.4, 0.63, 0.22)) / 2,
+      (scoreRange(bounds.width, FACE_SCORE_WIDTH_MIN, FACE_SCORE_WIDTH_MAX, 0.16) +
+        scoreRange(bounds.height, FACE_SCORE_HEIGHT_MIN, FACE_SCORE_HEIGHT_MAX, 0.2)) /
+        2,
       (scoreRange(lighting.brightness, 62, 208, 42) + scoreRange(lighting.contrast, 18, 96, 18)) / 2,
       occlusionClear ? 1 : 0,
     ];
@@ -1727,7 +1747,6 @@ export function ActiveLivenessPrototype() {
   const pitchDelta = baselinePitchRef.current === null ? 0 : metrics.pitchRatio - baselinePitchRef.current;
   const yawApproxDegrees = Math.round(metrics.yawRatio * 500);
   const pitchApprox = Math.round(pitchDelta * 1000);
-  const statusMessage = errorMessage || displayIssue;
   const currentStepReady =
     passReady || isTransitioning
       ? true
@@ -1742,6 +1761,8 @@ export function ActiveLivenessPrototype() {
               : activeStep === "up"
                 ? metrics.score >= SCORE_PASS_THRESHOLD && metrics.occlusionClear && pitchDelta <= -PITCH_DELTA_TARGET
                 : false;
+  const recoverableIssueVisible = holdProgress <= 0 && !currentStepReady && !passReady && !isTransitioning;
+  const statusMessage = errorMessage || (recoverableIssueVisible ? displayIssue : "");
   const progressPercent = Math.round((passReady || isTransitioning ? 1 : holdProgress) * 100);
   const ringState = statusMessage ? "warn" : passReady || isTransitioning ? "pass" : currentStepReady ? "ready" : "idle";
   const actionLabel =
@@ -1768,8 +1789,14 @@ export function ActiveLivenessPrototype() {
   const qualityChecks = [
     ["얼굴", metrics.detected, metrics.detected ? 1 : 0],
     ["단일 인물", metrics.singleFace, metrics.singleFace ? 1 : 0],
-    ["중앙", metrics.centered, (scoreRange(metrics.faceWidth ? 0.5 + (metrics.yawRatio * metrics.faceWidth) : 0.5, 0.42, 0.58, 0.2) + (metrics.centered ? 1 : 0)) / 2],
-    ["거리", metrics.properSize, (scoreRange(metrics.faceWidth, 0.28, 0.58, 0.12) + scoreRange(metrics.faceHeight, 0.38, 0.78, 0.16)) / 2],
+    ["중앙", metrics.centered, metrics.centered ? 1 : 0.35],
+    [
+      "거리",
+      metrics.properSize,
+      (scoreRange(metrics.faceWidth, FACE_SCORE_WIDTH_MIN, FACE_SCORE_WIDTH_MAX, 0.16) +
+        scoreRange(metrics.faceHeight, FACE_SCORE_HEIGHT_MIN, FACE_SCORE_HEIGHT_MAX, 0.2)) /
+        2,
+    ],
     ["조명", metrics.lightingGood, (scoreRange(metrics.brightness, 62, 208, 42) + scoreRange(metrics.contrast, 18, 96, 18)) / 2],
     ["가림", metrics.occlusionClear, metrics.occlusionScore],
   ] as const;
