@@ -1758,8 +1758,8 @@ export function ActiveLivenessPrototype() {
     if (cameraState !== "running") return "카메라를 시작하세요";
     if (isTransitioning) return "좋아요!";
     if (activeStep === "frontBlink") return "얼굴을 원 안에 맞추고 눈을 깜빡여주세요";
-    if (activeStep === "right") return "오른쪽으로 천천히 돌려주세요";
-    if (activeStep === "left") return "왼쪽으로 천천히 돌려주세요";
+    if (activeStep === "right") return "고개를 오른쪽 50~60도 정도로 돌려주세요";
+    if (activeStep === "left") return "고개를 왼쪽 50~60도 정도로 돌려주세요";
     if (activeStep === "down") return "고개를 아래로 살짝 숙여주세요";
     if (activeStep === "up") return "고개를 위로 살짝 들어주세요";
     return "인증이 완료되었습니다";
