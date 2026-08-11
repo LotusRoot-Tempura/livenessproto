@@ -147,6 +147,7 @@ const FRONT_HOLD_MS = 3000;
 const CHALLENGE_HOLD_MS = 1500;
 const SCORE_PASS_THRESHOLD = 82;
 const ISSUE_VISIBLE_DELAY_MS = 1500;
+const ISSUE_MIN_VISIBLE_MS = 1000;
 const STEP_TRANSITION_MS = 1300;
 const OCCLUSION_SAMPLE_WIDTH = 128;
 const OCCLUSION_SAMPLE_HEIGHT = 96;
@@ -982,6 +983,7 @@ export function ActiveLivenessPrototype() {
   const baselinePitchRef = useRef<number | null>(null);
   const startedAtRef = useRef<number | null>(null);
   const displayedIssueRef = useRef("");
+  const displayedIssueSinceRef = useRef<number | null>(null);
   const issueCandidateRef = useRef<{ key: string; startedAt: number } | null>(null);
   const transitionTimeoutRef = useRef<number | null>(null);
   const transitioningRef = useRef(false);
@@ -1026,14 +1028,31 @@ export function ActiveLivenessPrototype() {
     });
   };
 
-  const setVisibleIssue = (message: string) => {
+  const setVisibleIssue = (message: string, now: number | null = null) => {
     if (displayedIssueRef.current === message) return;
     displayedIssueRef.current = message;
+    displayedIssueSinceRef.current = message ? now : null;
     setDisplayIssue(message);
   };
 
   const clearVisibleIssue = () => {
     issueCandidateRef.current = null;
+    displayedIssueSinceRef.current = null;
+    setVisibleIssue("");
+  };
+
+  const releaseVisibleIssue = (now: number, options: { clearCandidate?: boolean } = {}) => {
+    if (options.clearCandidate ?? true) {
+      issueCandidateRef.current = null;
+    }
+
+    if (!displayedIssueRef.current) return;
+
+    const displayedSince = displayedIssueSinceRef.current;
+    if (displayedSince !== null && now - displayedSince < ISSUE_MIN_VISIBLE_MS) {
+      return;
+    }
+
     setVisibleIssue("");
   };
 
@@ -1221,19 +1240,21 @@ export function ActiveLivenessPrototype() {
 
     const issue = getQualityIssue(nextMetrics);
     if (!issue) {
-      clearVisibleIssue();
+      releaseVisibleIssue(now);
       return;
     }
 
     const candidate = issueCandidateRef.current;
     if (!candidate || candidate.key !== issue.key) {
       issueCandidateRef.current = { key: issue.key, startedAt: now };
-      setVisibleIssue("");
+      releaseVisibleIssue(now, { clearCandidate: false });
       return;
     }
 
     if (now - candidate.startedAt >= ISSUE_VISIBLE_DELAY_MS) {
-      setVisibleIssue(issue.message);
+      setVisibleIssue(issue.message, now);
+    } else if (displayedIssueRef.current && displayedIssueRef.current !== issue.message) {
+      releaseVisibleIssue(now, { clearCandidate: false });
     }
   };
 
@@ -1761,10 +1782,13 @@ export function ActiveLivenessPrototype() {
               : activeStep === "up"
                 ? metrics.score >= SCORE_PASS_THRESHOLD && metrics.occlusionClear && pitchDelta <= -PITCH_DELTA_TARGET
                 : false;
-  const recoverableIssueVisible = holdProgress <= 0 && !currentStepReady && !passReady && !isTransitioning;
-  const statusMessage = errorMessage || (recoverableIssueVisible ? displayIssue : "");
+  const activeQualityIssue = getQualityIssue(metrics);
+  const activeWarning = Boolean(
+    errorMessage || (displayIssue && activeQualityIssue && holdProgress <= 0 && !passReady && !isTransitioning),
+  );
+  const statusMessage = errorMessage || displayIssue;
   const progressPercent = Math.round((passReady || isTransitioning ? 1 : holdProgress) * 100);
-  const ringState = statusMessage ? "warn" : passReady || isTransitioning ? "pass" : holdProgress > 0 ? "ready" : "idle";
+  const ringState = activeWarning ? "warn" : passReady || isTransitioning ? "pass" : holdProgress > 0 || currentStepReady ? "ready" : "idle";
   const actionLabel =
     cameraState === "requesting" || modelState === "loading"
       ? "시작 중"
