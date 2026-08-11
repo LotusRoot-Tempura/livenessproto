@@ -61,7 +61,7 @@ Liveness는 카메라 앞의 대상이 단순한 얼굴 이미지, 녹화 영상
 | --- | --- |
 | `getUserMedia` | 전면 카메라 스트림 획득 |
 | MediaPipe `FaceLandmarker` | 얼굴 랜드마크 추출 |
-| Canvas | 방향 안내 화살표, 내부 픽셀 샘플링 |
+| Canvas | 방향 안내 화살표, 랜드마크/벡터 시각화, 내부 픽셀 샘플링 |
 | React state/ref | 현재 스텝, hold 타이머, 점수, 오류 메시지 관리 |
 | 휴리스틱 계산 | yaw, pitch, EAR, 조명, 가림, 품질 점수 계산 |
 
@@ -97,6 +97,17 @@ MediaPipe Face Landmarker는 얼굴의 여러 지점 좌표를 반환한다. 좌
 | `RIGHT_EYE_DENSE` | 오른쪽 눈 주변 형태와 영역 검사 |
 | `NOSE_DENSE` | 코 주변 형태와 영역 검사 |
 | `MOUTH_DENSE` | 입 주변 형태와 영역 검사 |
+
+또한 디버깅을 위해 카메라 화면 좌상단에 랜드마크 시각화 칩이 있다.
+
+| 칩 | 표시 내용 | 목적 |
+| --- | --- | --- |
+| `mesh` | MediaPipe `FACE_LANDMARKS_TESSELATION` 연결선과 전체 landmark dot | dense landmark가 얼굴 표면을 어떻게 추정하는지 확인 |
+| `contours` | MediaPipe `FACE_LANDMARKS_CONTOURS` | 얼굴/눈/입 윤곽 흐름 확인 |
+| `key points` | 현재 판정에 쓰는 주요 landmark index | yaw, pitch, EAR, 입 가림에 쓰이는 좌표 위치 확인 |
+| `vectors` | eye axis, pitch axis, mouth seam, EAR, yaw offset | 실제 판정에 가까운 벡터 변화 확인 |
+
+각 칩은 독립 토글이다. 여러 칩을 동시에 켜서 mesh, 주요 좌표, 벡터를 중첩해서 볼 수 있다.
 
 ## 5. 주요 지표와 의미
 
@@ -302,9 +313,38 @@ averageEar = (leftEar + rightEar) / 2
 
 가림 판정은 현재 구현에서 가장 어려운 부분이다. MediaPipe는 눈/코/입이 일부 가려져도 랜드마크를 "추정"해서 내놓을 수 있다. 따라서 랜드마크가 존재한다는 사실만으로는 실제로 보인다고 말할 수 없다.
 
-현재 구현은 두 종류의 신호를 함께 본다.
+현재 구현은 다음 네 계층을 함께 본다.
 
-### 6.1 랜드마크 형태 기반 검사
+1. 랜드마크 형태 기반 검사
+2. 픽셀/텍스처 기반 검사
+3. 입술선 검사
+4. 시간 기반 occlusion history + landmark jitter spike 빈도
+
+### 6.1 프레임 단위 원시 판정: `occlusionRawClear`
+
+`occlusionRawClear`는 현재 프레임 하나만 보고 눈/코/입이 보인다고 판단했는지 나타낸다.
+
+구성:
+
+```txt
+occlusionRawClear =
+  eyesShapeClear &&
+  noseShapeClear &&
+  mouthShapeClear &&
+  eyesTextureClear &&
+  noseTextureClear &&
+  mouthTextureClear
+```
+
+이 값은 Detail의 `raw`로 표시된다.
+
+주의할 점:
+
+- `raw`는 한 프레임 단위라 `OK`와 `NO`가 빠르게 반복될 수 있다.
+- 현재 최종 hold 조건은 `raw`만 보지 않는다.
+- `raw`는 디버깅용 원시 신호에 가깝고, 최종 판정은 `occlusionClear`다.
+
+### 6.2 랜드마크 형태 기반 검사
 
 눈/코/입 주변 dense landmark 묶음의 형태가 정상적인지 본다.
 
@@ -326,7 +366,9 @@ averageEar = (leftEar + rightEar) / 2
 - 입 중심이 코 아래 정상 위치에 있는가
 - 입술 상하 간격이 비정상적으로 크지 않은가
 
-### 6.2 픽셀/텍스처 기반 검사
+각 조건은 boolean으로만 쓰이지 않고, `eyesShapeScore`, `noseShapeScore`, `mouthShapeScore` 같은 0~1 점수로도 변환된다. 이 점수들은 뒤의 temporal occlusion score에 반영된다.
+
+### 6.3 픽셀/텍스처 기반 검사
 
 랜드마크 주변의 실제 영상 픽셀을 샘플링한다.
 
@@ -341,7 +383,7 @@ averageEar = (leftEar + rightEar) / 2
 - 손이나 마스크로 가려도 MediaPipe가 입/코 위치를 추정할 수 있다.
 - 실제 픽셀에서 입술선, 눈매, 코 주변 질감이 사라졌는지를 별도로 확인해야 한다.
 
-### 6.3 입술선 검사
+### 6.4 입술선 검사
 
 입 가림 대응을 위해 입꼬리 사이 중앙선을 샘플링한다.
 
@@ -361,6 +403,98 @@ averageEar = (leftEar + rightEar) / 2
 
 - 입을 크게 벌리거나 조명이 특이하면 실패할 수 있다.
 - 현재 UX는 "입은 자연스럽게 다문 상태"를 전제로 보는 편이 더 안정적이다.
+
+### 6.5 Landmark jitter
+
+실기기 테스트에서 중요한 관찰이 있었다.
+
+- 얼굴을 가리지 않은 평상시에는 `jitter`, `mouth jit`가 대체로 `0.0099` 아래에 머문다.
+- 얼굴 일부를 가리면 dense landmark의 위치나 면적이 크게 무너지지 않아도, 가린 부위 주변 key point와 vector가 짧은 순간 계속 흔들린다.
+- 특히 `0.01`을 넘는 spike가 반복되고, 순간적으로 `0.02 ~ 0.03`까지 튀는 경우가 있다.
+
+이를 반영해 현재 구현은 landmark jitter를 별도 신호로 계산한다.
+
+계산 개념:
+
+1. 최근 프레임의 주요 landmark snapshot을 저장한다.
+2. 얼굴 bounding box 중심과 크기로 좌표를 정규화한다.
+3. 이전 snapshot과 현재 snapshot의 평균 이동량을 계산한다.
+4. `global`, `eyes`, `nose`, `mouth` 부위별 jitter를 구한다.
+
+정규화하는 이유:
+
+- 사용자가 얼굴 전체를 조금 움직인 것과 특정 부위 landmark만 벌벌 떨리는 것을 구분하기 위해서다.
+- 픽셀 단위가 아니라 얼굴 크기 대비 흔들림으로 보므로, 얼굴 거리나 기기 해상도 차이를 줄일 수 있다.
+
+Detail 표시:
+
+| 지표 | 의미 |
+| --- | --- |
+| `jitter` | 얼굴 기준 landmark 전체 흔들림 |
+| `mouth jit` | 입 주변 landmark 흔들림 |
+
+### 6.6 Jitter spike 빈도 기반 가림 판정
+
+현재 최종 가림 판정은 `0.01` 초과 spike 빈도를 본다.
+
+기준:
+
+| 항목 | 값 | 의미 |
+| --- | --- | --- |
+| spike threshold | `0.01` | `jitter` 또는 `mouth jit`가 이 값을 넘으면 spike로 기록 |
+| hard spike threshold | `0.02` | 더 강한 흔들림으로 기록 |
+| history window | `1400ms` | 최근 약 1.4초 동안 spike 횟수/비율 집계 |
+
+Detail 표시:
+
+| 지표 | 의미 |
+| --- | --- |
+| `jit hits` | 최근 window 안에서 `jitter > 0.01` 또는 `mouth jit > 0.01`인 프레임 수 |
+| `mouth hits` | 최근 window 안에서 `mouth jit > 0.01`인 프레임 수 |
+| `jit rate` | 전체 history 중 jitter spike 비율 |
+| `mouth rate` | 전체 history 중 mouth jitter spike 비율 |
+
+현재 로직은 다음 상황에서 `occlusionClear=false` 쪽으로 강하게 기운다.
+
+- 최근 window에서 `jit hits`가 충분히 누적됨
+- 최근 window에서 `mouth hits`가 충분히 누적됨
+- `0.02` 이상 hard spike가 짧은 시간에 반복됨
+
+의도:
+
+- `raw`가 `OK/NO`를 반복하는 상황에서 최종 hold가 한 프레임마다 흔들리지 않게 한다.
+- 반대로 `occ`가 계속 95% 이상 유지되면서 가림을 놓치는 문제를 줄인다.
+- "가린 부위 landmark가 추정으로 유지되지만 과하게 떨린다"는 현상을 판정 신호로 사용한다.
+
+### 6.7 시간 기반 최종 판정: `occlusionClear`
+
+최종 `occlusionClear`는 현재 프레임 하나가 아니라 최근 history를 본다.
+
+주요 값:
+
+| 항목 | 값 | 의미 |
+| --- | --- | --- |
+| history window | `1400ms` | 최근 프레임 집계 구간 |
+| minimum history | `360ms` | 최소 관찰 시간 |
+| dropout grace | `480ms` | 짧은 순간 드랍 허용 시간 |
+| pass score | `0.74` | frame occlusion score 기준 |
+| pass ratio | `0.62` | history 안에서 통과 프레임 비율 기준 |
+
+최종 판정 개념:
+
+```txt
+frameOcclusionScore =
+  shape/texture score
+  + landmark jitter stability
+  - current jitter spike penalty
+
+temporal occlusion =
+  최근 1.4초 평균 score
+  + 통과 프레임 비율
+  - spike 빈도 penalty
+```
+
+`occ`는 이 temporal score를 0~100%로 보여준다. `occlusionClear=false`이면 전체 품질 점수 `score`는 최대 `68점`으로 제한된다.
 
 ## 7. 현재 판정 프로세스
 
@@ -428,9 +562,24 @@ qualityReady = score >= 82 && occlusionClear
 
 - 카메라 프리뷰
 - 얼굴 타원 가이드
+- 카메라 좌상단 landmark 시각화 칩
 - 현재 행동 안내 문구
 - 현재 스텝 프로그레스바
 - 재시작/초기화
+
+반응형 구조:
+
+- 모바일에서는 `Detail` 버튼을 눌렀을 때 검은 반투명 오버레이로 상세 지표를 보여준다.
+- PC/넓은 화면에서는 `Detail` 버튼 없이 오른쪽 사이드바에 상세 지표를 항상 보여준다.
+
+카메라 좌상단 시각화 칩:
+
+- `mesh`
+- `contours`
+- `key points`
+- `vectors`
+
+각 칩은 독립적으로 켜고 끌 수 있다. 여러 칩을 동시에 켜면 dense mesh, contour, 주요 좌표, 판정용 벡터를 중첩해서 볼 수 있다.
 
 Detail 모드:
 
@@ -444,6 +593,14 @@ Detail 모드:
 - pitch
 - EAR
 - light
+- `occ`: 시간 기반 최종 가림 신뢰도
+- `raw`: 현재 프레임 단위 원시 가림 판정
+- `jitter`: 얼굴 기준 landmark 전체 흔들림
+- `mouth jit`: 입 주변 landmark 흔들림
+- `jit hits`: 최근 window 안에서 `jitter > 0.01` 또는 `mouth jit > 0.01`인 횟수
+- `mouth hits`: 최근 window 안에서 `mouth jit > 0.01`인 횟수
+- `jit rate`: jitter spike 비율
+- `mouth rate`: mouth jitter spike 비율
 
 Detail 모드는 개발/튜닝용이다. 실제 상용 UX에서는 숨기거나 내부 QA 빌드에서만 노출하는 것이 맞다.
 
@@ -454,6 +611,10 @@ Detail 모드는 개발/튜닝용이다. 실제 상용 UX에서는 숨기거나 
 ### 10.1 MediaPipe는 가려진 부위도 추정할 수 있다
 
 눈, 코, 입이 일부 가려져도 모델이 얼굴 형태를 기반으로 랜드마크를 추정할 수 있다. 이 경우 랜드마크 좌표만 보면 정상처럼 보일 수 있다.
+
+현재 구현은 이 문제를 줄이기 위해 landmark jitter를 본다. 가려진 부위는 좌표 자체가 완전히 무너지지 않더라도 key point와 vector가 짧은 시간 안에 과하게 흔들리는 경우가 많다.
+
+다만 jitter도 완벽한 신호는 아니다. 조명 변화, 손떨림, 저사양 기기의 프레임 드랍, 고개 회전 중 motion blur도 jitter를 키울 수 있다.
 
 ### 10.2 2D 좌표만으로 3D 실재성을 보장할 수 없다
 
@@ -559,12 +720,18 @@ Detail 모드는 개발/튜닝용이다. 실제 상용 UX에서는 숨기거나 
    - 눈/코/입 ROI 픽셀 신호 계산 이해
 4. `getMouthLineSignal`
    - 입술선 기반 입 가림 검사 이해
-5. `buildMetrics`
+5. `getLandmarkJitterSignal`
+   - 얼굴 기준 정규화 landmark jitter 계산 이해
+6. `updateTemporalOcclusion`
+   - 최근 history, spike count/rate, dropout grace 기반 최종 가림 판정 이해
+7. `drawOverlay`
+   - mesh/contours/key points/vectors 시각화 이해
+8. `buildMetrics`
    - 모든 지표가 만들어지는 핵심 함수
-6. `runDetection`
+9. `runDetection`
    - 매 프레임 상태머신과 스텝 통과 로직
-7. React render 영역
-   - UI 표시, Detail overlay, progressbar 의미
+10. React render 영역
+   - UI 표시, Detail overlay/sidebar, visual chips, progressbar 의미
 
 ## 13. 현재 핵심 임계값 요약
 
@@ -581,6 +748,13 @@ Detail 모드는 개발/튜닝용이다. 실제 상용 UX에서는 숨기거나 
 | validation delay | `1500ms` | 오류 메시지 지연 표시 |
 | step transition | `1300ms` | 다음 스텝 전환 대기 |
 | 가림 실패 점수 cap | `68` | `occlusionClear=false`일 때 최대 점수 |
+| occlusion history | `1400ms` | 최근 프레임 기반 가림 판정 집계 구간 |
+| occlusion minimum history | `360ms` | temporal 가림 판정을 시작하기 위한 최소 관찰 시간 |
+| occlusion dropout grace | `480ms` | 짧은 가림 판정 드랍을 hold 리셋 없이 허용하는 시간 |
+| occlusion pass score | `0.74` | frame occlusion score 통과 기준 |
+| occlusion pass ratio | `0.62` | history 안에서 통과 프레임 비율 기준 |
+| jitter spike | `0.01` | `jitter` 또는 `mouth jit`가 이 값을 넘으면 spike로 집계 |
+| hard jitter spike | `0.02` | 더 강한 landmark 흔들림으로 간주 |
 
 ## 14. 이 프로토타입의 정확한 의미
 
