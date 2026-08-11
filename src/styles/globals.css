@@ -1355,6 +1355,10 @@ textarea {
   min-height: 640px;
   overflow: hidden;
   display: grid;
+  grid-template-areas:
+    "top"
+    "stage"
+    "actions";
   grid-template-rows: 76px minmax(0, 1fr) 126px;
   background: #05060b;
   color: #ffffff;
@@ -1363,6 +1367,7 @@ textarea {
 
 .liveness-topbar {
   position: relative;
+  grid-area: top;
   z-index: 12;
   display: flex;
   align-items: center;
@@ -1421,6 +1426,7 @@ textarea {
 
 .liveness-stage {
   position: relative;
+  grid-area: stage;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1607,6 +1613,7 @@ textarea {
 
 .liveness-actions {
   position: relative;
+  grid-area: actions;
   z-index: 10;
   display: grid;
   gap: 14px;
@@ -1649,6 +1656,10 @@ textarea {
   padding: 16px;
   background: rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(5px);
+}
+
+.liveness-sidebar {
+  display: none;
 }
 
 .liveness-detail-panel {
@@ -1872,6 +1883,59 @@ textarea {
   .liveness-shell {
     height: min(860px, calc(100svh - 48px));
     border-radius: 8px;
+  }
+}
+
+@media (min-width: 900px) {
+  .liveness-app {
+    padding: 28px;
+  }
+
+  .liveness-shell {
+    width: min(1120px, calc(100vw - 56px));
+    height: min(860px, calc(100svh - 56px));
+    max-height: none;
+    grid-template-areas:
+      "top sidebar"
+      "stage sidebar"
+      "actions sidebar";
+    grid-template-columns: minmax(360px, 420px) minmax(0, 1fr);
+    grid-template-rows: 76px minmax(0, 1fr) 126px;
+  }
+
+  .liveness-detail-button {
+    display: none;
+  }
+
+  .liveness-sidebar {
+    grid-area: sidebar;
+    min-width: 0;
+    min-height: 0;
+    display: block;
+    padding: 18px;
+    overflow: hidden;
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    background: #090a10;
+  }
+
+  .liveness-sidebar .liveness-detail-panel {
+    height: 100%;
+    max-height: none;
+    overflow: auto;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .liveness-sidebar .liveness-detail-header button,
+  .liveness-detail-backdrop {
+    display: none;
+  }
+
+  .liveness-readout {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 

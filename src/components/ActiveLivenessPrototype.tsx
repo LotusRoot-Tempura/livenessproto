@@ -1208,6 +1208,101 @@ export function ActiveLivenessPrototype() {
     ["가림", metrics.occlusionClear, metrics.occlusionClear ? 1 : 0],
   ] as const;
 
+  const renderDetailPanel = () => (
+    <div className="liveness-detail-panel" onClick={(event) => event.stopPropagation()}>
+      <div className="liveness-detail-header">
+        <div>
+          <span>Active Liveness</span>
+          <strong>{passReady ? "PASS" : activeStepInfo.label}</strong>
+        </div>
+        <button type="button" onClick={() => setDetailOpen(false)}>
+          닫기
+        </button>
+      </div>
+
+      <div className="liveness-quality">
+        <div className="liveness-quality__top">
+          <strong>품질 점수</strong>
+          <span>{metrics.score}/100</span>
+        </div>
+        <div className="liveness-meter">
+          <span style={{ width: `${metrics.score}%` }} />
+        </div>
+        <div className="liveness-badges">
+          {qualityChecks.map(([label, ok, progress]) => (
+            <Badge key={label} tone={ok ? "success" : "warning"} progress={progress}>
+              {label}
+            </Badge>
+          ))}
+        </div>
+      </div>
+
+      <div className="liveness-readout">
+        <div>
+          <span>step</span>
+          <strong>{passReady ? "완료" : `${currentStepIndex + 1}/5`}</strong>
+        </div>
+        <div>
+          <span>hold</span>
+          <strong>{Math.round(holdProgress * 100)}%</strong>
+        </div>
+        <div>
+          <span>ready</span>
+          <strong>{currentStepReady ? "OK" : "NO"}</strong>
+        </div>
+        <div>
+          <span>blink</span>
+          <strong>{blinkPhaseRef.current}</strong>
+        </div>
+        <div>
+          <span>yaw</span>
+          <strong>{yawApproxDegrees}°</strong>
+        </div>
+        <div>
+          <span>pitch</span>
+          <strong>{pitchApprox}</strong>
+        </div>
+        <div>
+          <span>EAR</span>
+          <strong>{formatNumber(metrics.averageEar, 3)}</strong>
+        </div>
+        <div>
+          <span>light</span>
+          <strong>{Math.round(metrics.brightness)}</strong>
+        </div>
+      </div>
+
+      <div className="liveness-steps">
+        {steps.slice(0, 5).map((step, index) => {
+          const done =
+            step.id === "frontBlink"
+              ? challenge.frontBlink
+              : step.id === "right"
+                ? challenge.right
+                : step.id === "left"
+                  ? challenge.left
+                  : step.id === "down"
+                    ? challenge.down
+                    : challenge.up;
+          const active = index === currentStepIndex && !passReady;
+          return (
+            <div key={step.id} className="liveness-step" data-active={active ? "true" : "false"} data-done={done ? "true" : "false"}>
+              <span>{index + 1}</span>
+              <strong>{step.label}</strong>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="liveness-result" data-pass={passReady ? "true" : "false"}>
+        <strong>{passReady ? "검증 완료" : `${completedCount}/5 단계 완료`}</strong>
+        <span>
+          프로그레스바는 현재 스텝 진행률입니다. 정면은 blink 확인 후 3초, 다른 동작은 지정 방향으로 1.5초 유지해야 통과됩니다.
+        </span>
+      </div>
+    </div>
+  );
+
   return (
     <section className="liveness-shell" data-camera={cameraState}>
       <header className="liveness-topbar">
@@ -1257,100 +1352,13 @@ export function ActiveLivenessPrototype() {
         </button>
       </footer>
 
+      <aside className="liveness-sidebar" aria-label="라이브니스 상세 점수">
+        {renderDetailPanel()}
+      </aside>
+
       {detailOpen ? (
         <div className="liveness-detail-backdrop" role="dialog" aria-modal="true" aria-label="라이브니스 상세 점수" onClick={() => setDetailOpen(false)}>
-          <div className="liveness-detail-panel" onClick={(event) => event.stopPropagation()}>
-            <div className="liveness-detail-header">
-              <div>
-                <span>Active Liveness</span>
-                <strong>{passReady ? "PASS" : activeStepInfo.label}</strong>
-              </div>
-              <button type="button" onClick={() => setDetailOpen(false)}>
-                닫기
-              </button>
-            </div>
-
-            <div className="liveness-quality">
-              <div className="liveness-quality__top">
-                <strong>품질 점수</strong>
-                <span>{metrics.score}/100</span>
-              </div>
-              <div className="liveness-meter">
-                <span style={{ width: `${metrics.score}%` }} />
-              </div>
-              <div className="liveness-badges">
-                {qualityChecks.map(([label, ok, progress]) => (
-                  <Badge key={label} tone={ok ? "success" : "warning"} progress={progress}>
-                    {label}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-
-            <div className="liveness-readout">
-              <div>
-                <span>step</span>
-                <strong>{passReady ? "완료" : `${currentStepIndex + 1}/5`}</strong>
-              </div>
-              <div>
-                <span>hold</span>
-                <strong>{Math.round(holdProgress * 100)}%</strong>
-              </div>
-              <div>
-                <span>ready</span>
-                <strong>{currentStepReady ? "OK" : "NO"}</strong>
-              </div>
-              <div>
-                <span>blink</span>
-                <strong>{blinkPhaseRef.current}</strong>
-              </div>
-              <div>
-                <span>yaw</span>
-                <strong>{yawApproxDegrees}°</strong>
-              </div>
-              <div>
-                <span>pitch</span>
-                <strong>{pitchApprox}</strong>
-              </div>
-              <div>
-                <span>EAR</span>
-                <strong>{formatNumber(metrics.averageEar, 3)}</strong>
-              </div>
-              <div>
-                <span>light</span>
-                <strong>{Math.round(metrics.brightness)}</strong>
-              </div>
-            </div>
-
-            <div className="liveness-steps">
-              {steps.slice(0, 5).map((step, index) => {
-                const done =
-                  step.id === "frontBlink"
-                    ? challenge.frontBlink
-                    : step.id === "right"
-                      ? challenge.right
-                      : step.id === "left"
-                        ? challenge.left
-                        : step.id === "down"
-                          ? challenge.down
-                          : challenge.up;
-                const active = index === currentStepIndex && !passReady;
-                return (
-                  <div key={step.id} className="liveness-step" data-active={active ? "true" : "false"} data-done={done ? "true" : "false"}>
-                    <span>{index + 1}</span>
-                    <strong>{step.label}</strong>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="liveness-result" data-pass={passReady ? "true" : "false"}>
-              <strong>{passReady ? "검증 완료" : `${completedCount}/5 단계 완료`}</strong>
-              <span>
-                프로그레스바는 현재 스텝 진행률입니다. 정면은 blink 확인 후 3초, 다른 동작은 지정 방향으로 1.5초 유지해야 통과됩니다.
-              </span>
-            </div>
-          </div>
+          {renderDetailPanel()}
         </div>
       ) : null}
     </section>
